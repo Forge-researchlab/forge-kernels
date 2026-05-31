@@ -17,6 +17,7 @@ INT32_SAFETY_BUFFER = 2**31 - FLAT_BLOCK_SIZE * 4
 
 
 def _check_same_shape_inputs(gate: torch.Tensor, up: torch.Tensor) -> None:
+    """Inputs: gate/up tensors. Outputs: none (raises on mismatch). Logic: enforce matching shape/device/dtype and floating point before launch."""
     if gate.shape != up.shape:
         raise ValueError(f"gate and up must have the same shape, got {gate.shape} and {up.shape}")
     if gate.device != up.device:
@@ -28,11 +29,13 @@ def _check_same_shape_inputs(gate: torch.Tensor, up: torch.Tensor) -> None:
 
 
 def _check_cuda_dtype(x: torch.Tensor) -> None:
+    """Inputs: a tensor. Outputs: none (raises on unsupported dtype). Logic: the CUDA kernels only handle fp16/bf16/fp32."""
     if x.dtype not in (torch.float16, torch.bfloat16, torch.float32):
         raise TypeError(f"CUDA GEGLU supports fp16, bf16, and fp32, got {x.dtype}")
 
 
 def _check_packed_input(gate_up: torch.Tensor) -> None:
+    """Inputs: a packed gate_up tensor. Outputs: none (raises on bad input). Logic: the last dim splits into gate||up halves, so it must be even and floating point."""
     if gate_up.shape[-1] % 2 != 0:
         raise ValueError(f"packed gate_up last dimension must be even, got {gate_up.shape[-1]}")
     if not gate_up.is_floating_point():
@@ -40,6 +43,7 @@ def _check_packed_input(gate_up: torch.Tensor) -> None:
 
 
 def _check_approximate(approximate: str) -> bool:
+    """Inputs: the approximate mode string. Outputs: True if tanh approximation. Logic: validate the GELU variant and return a bool the kernels use as a constexpr."""
     if approximate not in {"tanh", "none"}:
         raise ValueError(f"approximate must be 'tanh' or 'none', got {approximate!r}")
     return approximate == "tanh"
@@ -52,6 +56,7 @@ def _check_linear_weight(
     device: torch.device | None = None,
     dtype: torch.dtype | None = None,
 ) -> None:
+    """Inputs: a linear weight plus expected in_features/device/dtype. Outputs: none (raises on mismatch). Logic: validate a [out_features, in_features] weight before the GEMM."""
     if weight.dim() != 2:
         raise ValueError(f"{name} must be 2D [out_features, in_features], got shape {tuple(weight.shape)}")
     if weight.shape[1] != in_features:
@@ -71,6 +76,7 @@ def _check_optional_bias(
     device: torch.device | None = None,
     dtype: torch.dtype | None = None,
 ) -> None:
+    """Inputs: an optional bias plus expected out_features/device/dtype. Outputs: none (raises on mismatch). Logic: None is allowed; otherwise require a 1D [out_features] tensor."""
     if bias is None:
         return
     if bias.dim() != 1 or bias.shape[0] != out_features:
@@ -84,11 +90,13 @@ def _check_optional_bias(
 
 
 def _uses_long_indexing(num_elements: int) -> bool:
+    """Inputs: total element count. Outputs: True if int32 offsets could overflow. Logic: switch the kernels to int64 indexing once near the int32 limit."""
     return num_elements > INT32_SAFETY_BUFFER
 
 
 @triton.jit
 def _gelu_activation(gate_fp32, APPROXIMATE_TANH: tl.constexpr):
+    """Device function: GELU(gate) in fp32. tanh branch is the tanh approximation, else the exact erf form."""
     if APPROXIMATE_TANH:
         sqrt_2_over_pi = 0.7978845608028654
         tanh_arg = sqrt_2_over_pi * gate_fp32 * (1.0 + 0.044715 * gate_fp32 * gate_fp32)
@@ -103,6 +111,11 @@ def _gelu_activation(gate_fp32, APPROXIMATE_TANH: tl.constexpr):
 
 @triton.jit
 def _gelu_activation_and_grad(gate_fp32, APPROXIMATE_TANH: tl.constexpr):
+    """Device function: returns (GELU(gate), d GELU/d gate) in fp32 for the backward pass.
+
+    Both branches differentiate the matching forward formula analytically so the
+    backward kernel never has to recompute the activation separately.
+    """
     if APPROXIMATE_TANH:
         sqrt_2_over_pi = 0.7978845608028654
         gate_sq = gate_fp32 * gate_fp32
@@ -133,13 +146,15 @@ def _geglu_forward_kernel(
     APPROXIMATE_TANH: tl.constexpr,
     LONG_INDEXING: tl.constexpr,
 ):
+    """Flat (element-wise) GEGLU forward: out = gelu(gate) * up over BLOCK_SIZE elements per program."""
     block_idx = tl.program_id(0)
+    # int64 offsets only when the tensor is large enough to overflow int32.
     if LONG_INDEXING:
         offsets = block_idx.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE).to(tl.int64)
         n_elements = tl.cast(n_elements, tl.int64)
     else:
         offsets = block_idx * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
+    mask = offsets < n_elements  # guard the tail block
 
     gate = tl.load(gate_ptr + offsets, mask=mask, other=0.0)
     up = tl.load(up_ptr + offsets, mask=mask, other=0.0)
@@ -160,6 +175,11 @@ def _geglu_backward_kernel(
     APPROXIMATE_TANH: tl.constexpr,
     LONG_INDEXING: tl.constexpr,
 ):
+    """Flat GEGLU backward. With a = gelu(gate), out = a * up, so dup = dout * a and dgate = dout * up * a'.
+
+    activated is cast to the input dtype and back to fp32 so dup matches what the
+    forward pass actually stored (which rounded the activation to the input dtype).
+    """
     block_idx = tl.program_id(0)
     if LONG_INDEXING:
         offsets = block_idx.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE).to(tl.int64)
@@ -173,11 +193,11 @@ def _geglu_backward_kernel(
     up = tl.load(up_ptr + offsets, mask=mask, other=0.0)
 
     activated, activated_grad = _gelu_activation_and_grad(gate.to(tl.float32), APPROXIMATE_TANH)
-    activated_cast_fp32 = activated.to(gate.dtype).to(tl.float32)
+    activated_cast_fp32 = activated.to(gate.dtype).to(tl.float32)  # match the dtype rounding of forward
     dout_fp32 = dout.to(tl.float32)
 
     dup = dout_fp32 * activated_cast_fp32
-    dgate = dout_fp32 * up.to(tl.float32) * activated_grad
+    dgate = dout_fp32 * up.to(tl.float32) * activated_grad  # activated_grad = d gelu/d gate
     tl.store(dgate_ptr + offsets, dgate, mask=mask)
     tl.store(dup_ptr + offsets, dup, mask=mask)
 
@@ -193,6 +213,12 @@ def _geglu_packed_forward_kernel(
     APPROXIMATE_TANH: tl.constexpr,
     LONG_INDEXING: tl.constexpr,
 ):
+    """Packed GEGLU forward over a flat output index space.
+
+    Each flat output index maps to (row, col); within the packed input row the
+    gate element is at col and the up element n_cols further along, so the two
+    halves are gathered without materializing separate gate/up tensors.
+    """
     block_idx = tl.program_id(0)
     if LONG_INDEXING:
         output_offsets = block_idx.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE).to(tl.int64)
@@ -201,6 +227,7 @@ def _geglu_packed_forward_kernel(
         output_offsets = block_idx * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = output_offsets < n_elements
 
+    # Map the flat output index to (row, col), then into the packed gate/up slots.
     row_idx = output_offsets // n_cols
     col_idx = output_offsets - row_idx * n_cols
     gate_offsets = row_idx * total_cols + col_idx
@@ -225,6 +252,11 @@ def _geglu_packed_backward_kernel(
     APPROXIMATE_TANH: tl.constexpr,
     LONG_INDEXING: tl.constexpr,
 ):
+    """Packed GEGLU backward; same gate/up gather as the packed forward, same math as the flat backward.
+
+    dgate and dup are written back into the gate and up slots of the packed
+    dgate_up buffer (in place unless the caller passed a preserved copy).
+    """
     block_idx = tl.program_id(0)
     if LONG_INDEXING:
         output_offsets = block_idx.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE).to(tl.int64)
@@ -233,6 +265,7 @@ def _geglu_packed_backward_kernel(
         output_offsets = block_idx * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = output_offsets < n_elements
 
+    # Map the flat output index to (row, col), then into the packed gate/up slots.
     row_idx = output_offsets // n_cols
     col_idx = output_offsets - row_idx * n_cols
     gate_offsets = row_idx * total_cols + col_idx
@@ -257,6 +290,7 @@ def torch_geglu_reference(
     up: torch.Tensor,
     approximate: str = "tanh",
 ) -> torch.Tensor:
+    """Inputs: gate/up tensors and GELU mode. Outputs: GEGLU result. Logic: pure-PyTorch reference used for correctness checks and CPU fallback."""
     _check_same_shape_inputs(gate, up)
     _check_approximate(approximate)
     activated = torch.nn.functional.gelu(gate.float(), approximate=approximate).to(dtype=gate.dtype)
@@ -267,6 +301,7 @@ def torch_geglu_packed_reference(
     gate_up: torch.Tensor,
     approximate: str = "tanh",
 ) -> torch.Tensor:
+    """Inputs: packed gate_up tensor and GELU mode. Outputs: GEGLU result. Logic: split the last dim into gate/up halves and defer to the reference."""
     _check_packed_input(gate_up)
     gate, up = gate_up.chunk(2, dim=-1)
     return torch_geglu_reference(gate, up, approximate)
@@ -382,6 +417,7 @@ def geglu_forward(
     up: torch.Tensor,
     approximate: str = "tanh",
 ):
+    """Inputs: gate/up tensors and GELU mode. Outputs: (result, gate_flat, up_flat). Logic: flatten to 1D, launch a flat element-wise grid, return the flat views for backward to reuse."""
     _check_same_shape_inputs(gate, up)
     _check_cuda_dtype(gate)
     approximate_tanh = _check_approximate(approximate)
@@ -413,12 +449,14 @@ def geglu_backward(
     approximate: str = "tanh",
     preserve_inputs: bool = False,
 ):
+    """Inputs: dout, saved gate/up, GELU mode, preserve flag. Outputs: (dgate, dup). Logic: by default overwrite gate/up in place to save memory; preserve_inputs keeps them by writing to fresh buffers."""
     approximate_tanh = _check_approximate(approximate)
     original_shape = dout.shape
     dout_flat = dout.contiguous().view(-1)
     n_elements = dout_flat.numel()
     grid = (triton.cdiv(n_elements, FLAT_BLOCK_SIZE),)
 
+    # In place by default; preserve_inputs trades memory for keeping gate/up intact.
     dgate = torch.empty_like(gate) if preserve_inputs else gate
     dup = torch.empty_like(up) if preserve_inputs else up
 
@@ -441,6 +479,7 @@ def geglu_packed_forward(
     gate_up: torch.Tensor,
     approximate: str = "tanh",
 ):
+    """Inputs: packed gate_up tensor and GELU mode. Outputs: (result, gate_up_2d). Logic: output is half the width; the flat grid spans n_rows * n_cols and gathers the gate/up halves itself."""
     _check_packed_input(gate_up)
     _check_cuda_dtype(gate_up)
     approximate_tanh = _check_approximate(approximate)
@@ -474,6 +513,7 @@ def geglu_packed_backward(
     approximate: str = "tanh",
     preserve_inputs: bool = False,
 ):
+    """Inputs: dout, saved packed gate_up, original input_shape, GELU mode, preserve flag. Outputs: dgate_up packed like the input. Logic: kernel writes both grads back into the packed buffer (in place unless preserve_inputs)."""
     approximate_tanh = _check_approximate(approximate)
     n_cols = dout.shape[-1]
     total_cols = input_shape[-1]
@@ -499,6 +539,8 @@ def geglu_packed_backward(
 
 
 class ForgeGEGLUFunction(torch.autograd.Function):
+    """Autograd wrapper for the unpacked GEGLU: saves the flattened gate/up for backward."""
+
     @staticmethod
     def forward(
         ctx,
@@ -507,6 +549,7 @@ class ForgeGEGLUFunction(torch.autograd.Function):
         approximate: str = "tanh",
         preserve_inputs: bool = False,
     ):
+        """Run the forward kernel and stash gate/up plus the GELU mode on ctx for backward."""
         y, gate_flat, up_flat = geglu_forward(gate, up, approximate)
         ctx.save_for_backward(gate_flat, up_flat)
         ctx.approximate = approximate
@@ -515,12 +558,15 @@ class ForgeGEGLUFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, dout: torch.Tensor):
+        """Return grads for (gate, up); the two trailing None match the non-tensor forward args."""
         gate, up = ctx.saved_tensors
         dgate, dup = geglu_backward(dout, gate, up, ctx.approximate, ctx.preserve_inputs)
         return dgate, dup, None, None
 
 
 class ForgePackedGEGLUFunction(torch.autograd.Function):
+    """Autograd wrapper for the packed GEGLU: also records the input shape so backward can repack."""
+
     @staticmethod
     def forward(
         ctx,
@@ -528,6 +574,7 @@ class ForgePackedGEGLUFunction(torch.autograd.Function):
         approximate: str = "tanh",
         preserve_inputs: bool = False,
     ):
+        """Run the packed forward kernel and save the flattened gate_up, its shape, and GELU mode for backward."""
         y, gate_up_2d = geglu_packed_forward(gate_up, approximate)
         ctx.save_for_backward(gate_up_2d)
         ctx.input_shape = gate_up.shape
@@ -537,6 +584,7 @@ class ForgePackedGEGLUFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, dout: torch.Tensor):
+        """Return the packed grad for gate_up; the two trailing None match the non-tensor forward args."""
         (gate_up,) = ctx.saved_tensors
         dgate_up = geglu_packed_backward(
             dout,
@@ -554,6 +602,7 @@ def geglu(
     approximate: str = "tanh",
     preserve_inputs: bool = False,
 ) -> torch.Tensor:
+    """Inputs: gate/up tensors, GELU mode, preserve flag. Outputs: GEGLU result. Logic: public entry point; CPU tensors take the PyTorch reference, CUDA tensors take the autograd-enabled Triton path."""
     _check_same_shape_inputs(gate, up)
     _check_approximate(approximate)
     if not gate.is_cuda:
@@ -566,6 +615,7 @@ def geglu_packed(
     approximate: str = "tanh",
     preserve_inputs: bool = False,
 ) -> torch.Tensor:
+    """Inputs: packed gate_up tensor, GELU mode, preserve flag. Outputs: GEGLU result (half width). Logic: public entry point for the packed layout; CPU falls back to the reference, CUDA uses the Triton path."""
     _check_packed_input(gate_up)
     _check_approximate(approximate)
     if not gate_up.is_cuda:
