@@ -11,19 +11,19 @@ All numbers below are read from committed result files, not estimates. Every run
 
 | Kernel                     | Best recorded speedup | Baseline               | Shape / config                      | Source                                                                               |
 | -------------------------- | --------------------- | ---------------------- | ----------------------------------- | ------------------------------------------------------------------------------------ |
-| **RoPE** (v3)              | **7.1×** fwd          | PyTorch eager          | 2×32/8×2048×128, GQA G=4, bf16      | `[v3_summary.md](kernels/rope/benchmarks/results/v3_summary.md)`                     |
+| **RoPE** (v3)              | **7.1×** fwd          | PyTorch eager          | 2×32/8×2048×128, GQA G=4, bf16      | [`v3_summary.md`](kernels/rope/benchmarks/results/v3_summary.md)                     |
 |                            | 2.8× fwd              | Unsloth fused-QK       | same                                | same                                                                                 |
 |                            | 3.2× fwd              | Liger                  | same                                | same                                                                                 |
-| **RMSNorm** (v4)           | **10.2×** fwd         | PyTorch eager          | 2×2048×4096, bf16, offset=1.0       | `[v4_summary.md](kernels/rmsnorm/benchmarks/results/v4_summary.md)`                  |
-| **SwiGLU**                 | **6.5×** fwd          | PyTorch eager (packed) | 4×2048×11008, bf16                  | `[swiglu_a100_bf16.csv](results/swiglu_a100_bf16.csv)`                               |
-|                            | 1.5× fwd              | Liger                  | 4×2048×11008, bf16, mult 0.7/1.3    | `[..._with_liger.csv](results/swiglu_a100_bf16_with_liger.csv)`                      |
-| **GeGLU** (activation)     | **5.2×** fwd+bwd      | PyTorch eager (packed) | 4×2048×11008, bf16, tanh            | `[geglu_activation_a100_bf16.csv](geglu_activation_a100_bf16.csv)`                   |
-| **GeGLU** (gate+up fusion) | **1.40×** fwd         | separate PyTorch MLP   | 1×512×4096, i=11008, bf16           | `[geglu_gateup_a100_bf16.csv](geglu_gateup_a100_bf16.csv)`                           |
-| **LoRA QKV** (v4)          | **1.37×** fwd+bwd     | Unsloth                | 4×2048, h=4096, GQA 32/8, r=8, bf16 | `[CHANGELOG.md](kernels/lora_qkv/CHANGELOG.md)`                                      |
-| **LoRA MLP** (v6)          | **1.18×** fwd         | Unsloth                | 4×2048, h=4096, i=14336, r=16, bf16 | `[v6_upgrade_1_latency_*.csv](kernels/lora_mlp/benchmarks/results/)`                 |
-| **LayerNorm**              | **1.57×** fwd+bwd     | PyTorch eager          | 8×2048×4096, fp32                   | `[layernorm_tests.executed.ipynb](kernels/layernorm/layernorm_tests.executed.ipynb)` |
-| **Cross-Entropy**          | not yet measured      | —                      | harness ready, no run committed     | `[benchmarks.md](kernels/cross_entropy/docs/benchmarks.md)`                          |
-| **Embedding**              | not yet measured      | —                      | harness ready, no run committed     | `[bench_embedding.py](kernels/embedding/benchmarks/bench_embedding.py)`              |
+| **RMSNorm** (v4)           | **10.2×** fwd         | PyTorch eager          | 2×2048×4096, bf16, offset=1.0       | [`v4_summary.md`](kernels/rmsnorm/benchmarks/results/v4_summary.md)                  |
+| **SwiGLU**                 | **6.5×** fwd          | PyTorch eager (packed) | 4×2048×11008, bf16                  | [`swiglu_a100_bf16.csv`](results/swiglu_a100_bf16.csv)                               |
+|                            | 1.5× fwd              | Liger                  | 4×2048×11008, bf16, mult 0.7/1.3    | [`..._with_liger.csv`](results/swiglu_a100_bf16_with_liger.csv)                      |
+| **GeGLU** (activation)     | **5.2×** fwd+bwd      | PyTorch eager (packed) | 4×2048×11008, bf16, tanh            | [`geglu_activation_a100_bf16.csv`](geglu_activation_a100_bf16.csv)                   |
+| **GeGLU** (gate+up fusion) | **1.40×** fwd         | separate PyTorch MLP   | 1×512×4096, i=11008, bf16           | [`geglu_gateup_a100_bf16.csv`](geglu_gateup_a100_bf16.csv)                           |
+| **LoRA QKV** (v4)          | **1.37×** fwd+bwd     | Unsloth                | 4×2048, h=4096, GQA 32/8, r=8, bf16 | [`CHANGELOG.md`](kernels/lora_qkv/CHANGELOG.md)                                      |
+| **LoRA MLP** (v6)          | **1.18×** fwd         | Unsloth                | 4×2048, h=4096, i=14336, r=16, bf16 | [`v6_upgrade_1_latency_*.csv`](kernels/lora_mlp/benchmarks/results/)                 |
+| **LayerNorm**              | **1.57×** fwd+bwd     | PyTorch eager          | 8×2048×4096, fp32                   | [`layernorm_tests.executed.ipynb`](kernels/layernorm/layernorm_tests.executed.ipynb) |
+| **Cross-Entropy**          | not yet measured      | —                      | harness ready, no run committed     | [`benchmarks.md`](kernels/cross_entropy/docs/benchmarks.md)                          |
+| **Embedding**              | not yet measured      | —                      | harness ready, no run committed     | [`bench_embedding.py`](kernels/embedding/benchmarks/bench_embedding.py)              |
 
 
 ### Where these kernels lose
@@ -47,7 +47,7 @@ Headline numbers are best-case. The same result files record regressions, and th
 | LoRA MLP      | 152 tests pass                                                             | PASS (v2, v5, v6)                    |
 | SwiGLU        | 75 pass                                                                    | not run                              |
 | LoRA QKV v4   | 18 tests pass                                                              | PASS (MHA, GQA, r=4/8/16)            |
-| RMSNorm v4    | results committed under `[tests/results/](kernels/rmsnorm/tests/results/)` | —                                    |
+| RMSNorm v4    | results committed under [`tests/results/`](kernels/rmsnorm/tests/results/) | —                                    |
 | Cross-Entropy | 25 tests defined, no run committed                                         | uses `assert_close`, not `gradcheck` |
 | GeGLU         | no run committed                                                           | explicitly deferred                  |
 
@@ -96,20 +96,20 @@ artifacts/                # LoRA demo curves, FSDP2 analysis dashboards
 results/                  # top-level SwiGLU CSVs
 ```
 
-The `forge` package is the integration story: `forge.patch(model)` swaps kernels into a live Hugging Face model, with architecture detection for `qwen2`, `qwen3`, `gemma`, and `gemma2`, and an idempotent `unpatch`. See `[forge/forge/patching/core.py](forge/forge/patching/core.py)`.
+The `forge` package is the integration story: `forge.patch(model)` swaps kernels into a live Hugging Face model, with architecture detection for `qwen2`, `qwen3`, `gemma`, and `gemma2`, and an idempotent `unpatch`. See [`forge/forge/patching/core.py`](forge/forge/patching/core.py).
 
 ## Known gaps
 
 Kept here so the repo does not overstate itself:
 
 - **Cross-Entropy and Embedding have no committed benchmark results.** Both harnesses are written and wired into `bench_all.py`, but `benchmarks/results/` for each contains only `.gitkeep`. No memory reduction has been measured for fused linear + cross-entropy at any vocabulary size.
-- `requirements.txt` is empty — dependencies live in `[pyproject.toml](pyproject.toml)` and `uv.lock`.
+- `requirements.txt` is empty — dependencies live in [`pyproject.toml`](pyproject.toml) and `uv.lock`.
 - `tests/test_cross_entropy.py`, `test_lora_mlp.py`, `test_lora_qkv.py`, and `test_rope.py` at the top level are empty placeholders. The real suites are under `kernels/<name>/tests/`.
 - GeGLU fp64 gradcheck is deferred.
 - `ForgeRMSNorm` does not accept Gemma's `offset` parameter, so `forge.patch` skips RMSNorm on Gemma models.
 - The LoRA QKV v4 CSV disagrees with the numbers in its own `CHANGELOG.md` and analysis doc; the table above uses the CHANGELOG figures, and the discrepancy is unresolved.
 
-A fuller track-by-track assessment is in `[docs/hackathon_day1_audit.md](docs/hackathon_day1_audit.md)`.
+A fuller track-by-track assessment is in [`docs/hackathon_day1_audit.md`](docs/hackathon_day1_audit.md).
 
 ## Requirements
 
@@ -117,9 +117,9 @@ Python 3.11–3.12, CUDA 12.1+, `torch>=2.4,<2.5`, `triton>=3.0,<3.1`, `liger-ke
 
 ## Contributors
 
-- **Devansh Agarwal** — SwiGLU,  RMSNorm, LoRA MLP
-- **Sasank Tumpati** —  fused linear cross-entropy, Qwen patch adapters
-- **Shaurya Madukuri** — Qwen2.5-0.5B LoRA demo,Cross-Entropy, FSDP2 analysis artifacts
+- **Devansh Agarwal** — SwiGLU, RMSNorm, LoRA MLP
+- **Sasank Tumpati** — fused linear cross-entropy, Qwen patch adapters
+- **Shaurya Madukuri** — Embedding, Cross-Entropy, Qwen2.5-0.5B LoRA demo, FSDP2 analysis artifacts
 - **Xhitij C** — LoRA QKV, GeGLU
 
-Kernel attribution follows `git log`; several commits were authored from a shared GPU box, so treat the mapping as approximate.
+Several commits were authored from a shared GPU box, so `git log` does not reflect ownership; the list above is the authoritative one.
