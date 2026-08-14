@@ -42,6 +42,31 @@ jobs:
             exit 1
           fi
 
+      - name: Every package is declared for packaging
+        run: python scripts/check_packages_declared.py
+
+      - name: The wheel is importable without the repository
+        # The wheel used to ship the patching layer and no kernels, so `import
+        # forge` worked in a checkout and failed everywhere else. Build it and
+        # import from site-packages with the repo off sys.path. torch is far too
+        # heavy for a CPU runner, so this stops at the import boundary: it proves
+        # the kernel modules are present and reachable, not that they run.
+        run: |
+          python -m pip install -q build
+          python -m build --wheel --outdir dist/
+          python -m venv /tmp/wheelcheck
+          /tmp/wheelcheck/bin/pip install -q --no-deps dist/*.whl
+          cd /tmp
+          /tmp/wheelcheck/bin/python - <<'PY'
+          import importlib.util as u
+          for name in ("forge", "forge.patching.core", "kernels.rope.forge_rope_v3",
+                       "kernels.lora_mlp.experiments.v6.lora_mlp_kernel_v6",
+                       "kernels.lora_mlp.reference.unsloth_baseline",
+                       "kernels.cross_entropy.experiments.v2"):
+              assert u.find_spec(name) is not None, f"{name} is not in the wheel"
+          print("all kernel modules resolve from site-packages")
+          PY
+
       - name: Result files referenced by the README exist
         run: |
           status=0
