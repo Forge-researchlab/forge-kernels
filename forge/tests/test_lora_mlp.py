@@ -142,14 +142,19 @@ def _run_case(label, B, S, hidden, intermediate, r, dtype,
 
     # Forge v6
     try:
+        # Keyword arguments past the LoRA weights: v6 gained W_gate_stack and
+        # W_down_stack between A_stack and enable_streams, so positional calls
+        # land the bool in a tensor slot and fail with 'bool' has no attribute 't'.
         Y_fge = LoRAMLPv6.apply(
             fge_in["X"],
             W["W_gate"], fge_in["A_gate"], fge_in["B_gate"], s_gate,
             W["W_up"],   fge_in["A_up"],   fge_in["B_up"],   s_up,
             W["W_down"], fge_in["A_down"], fge_in["B_down"], s_down,
-            None,           # A_stack (None → computed internally)
-            enable_streams, # enable_streams
-            None,           # side_stream
+            None,                          # A_stack (None → computed internally)
+            None,                          # W_gate_stack
+            None,                          # W_down_stack
+            enable_streams,
+            None,                          # side_stream
         )
         Y_fge.sum().backward()
     except Exception as e:

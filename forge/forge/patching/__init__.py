@@ -14,7 +14,19 @@ Two patch modalities, both reversible via unpatch():
    It is called inline from attention.forward — there is no module instance
    whose forward we can monkey-patch. So we swap the function at module level
    and remember the original for unpatch.
+
+Shape-sensitive kernels are additionally guarded per call: a fused kernel only
+beats eager once there is enough work in the launch to amortise it, and the row
+count is a property of the batch rather than of the model. See
+`forge.patching.kernels.common` for the threshold and the measurements behind it.
 """
 from .core import patch, unpatch
+from .kernels import MIN_FUSED_ELEMENTS, guard_stats, reset_guard_stats
 
-__all__ = ["patch", "unpatch"]
+__all__ = [
+    "MIN_FUSED_ELEMENTS",
+    "guard_stats",
+    "patch",
+    "reset_guard_stats",
+    "unpatch",
+]

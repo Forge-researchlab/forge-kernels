@@ -1,3 +1,6 @@
+> **Base branch:** please target `dev`, not `main`. GitHub defaults the base to
+> `main`; change it in the dropdown above if it is not already `dev`.
+
 ## What this changes
 
 <!-- One or two sentences. If it fixes an issue, link it. -->

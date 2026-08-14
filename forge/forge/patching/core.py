@@ -41,7 +41,16 @@ from typing import Callable, Dict, List, Optional, Tuple
 from .qwen3 import QWEN3_MAPPING, QWEN3_MODULE_LEVEL_PATCHES
 from .gemma import GEMMA_MAPPING, GEMMA_MODULE_LEVEL_PATCHES
 from .kernels import FORWARD_MAKERS as _FORWARD_MAKERS
-from .kernels import ForgeSkipPatch
+from .kernels import (
+    MIN_FUSED_ELEMENTS,
+    MODULE_LEVEL_PREDICATES,
+    SHAPE_GUARDED,
+    TRAINING_ONLY,
+    WORK_WIDTH,
+    ForgeSkipPatch,
+    enough_work,
+    with_guard,
+)
 
 
 # ----------------------------------------------------------------------------
@@ -89,11 +98,17 @@ def _detect_architecture(model) -> str:
 # Per-module-instance forward replacement
 # ----------------------------------------------------------------------------
 
-def _replace_forward(module, kernel_name: str, config: dict, originals: dict) -> bool:
+def _replace_forward(module, kernel_name: str, config: dict, originals: dict,
+                     min_elements: int, collect_stats: bool) -> bool:
     """Replace `module.forward` via the matching closure factory.
 
     Returns True if the replacement happened, False if the kernel is a stub and
     we silently skipped it.
+
+    Shape-sensitive kernels are wrapped so that each call falls back to the
+    original forward when it is too small to be worth fusing. The threshold
+    cannot be applied at patch time because the row count belongs to the batch,
+    not to the model.
     """
     if kernel_name not in _FORWARD_MAKERS:
         raise KeyError(
@@ -105,7 +120,17 @@ def _replace_forward(module, kernel_name: str, config: dict, originals: dict) ->
         new_fwd = maker(module, config)
     except ForgeSkipPatch:
         return False
-    originals[id(module)] = (module, module.forward)
+
+    original_fwd = module.forward
+    if min_elements > 0 and kernel_name in SHAPE_GUARDED:
+        width = WORK_WIDTH.get(kernel_name, lambda _module: 1)(module)
+        new_fwd = with_guard(
+            kernel_name, new_fwd, original_fwd,
+            lambda args, kwargs, _w=width: enough_work(args, kwargs, min_elements, _w),
+            collect_stats=collect_stats,
+        )
+
+    originals[id(module)] = (module, original_fwd)
     module.forward = new_fwd
     return True
 
@@ -117,15 +142,21 @@ def _replace_forward(module, kernel_name: str, config: dict, originals: dict) ->
 _MODULE_LEVEL_KEY = "__forge_module_level__"
 
 
-def _apply_module_level_patches(patches: List[Tuple[str, str, Callable]], originals: dict) -> None:
+def _apply_module_level_patches(patches: List[Tuple[str, str, Callable, str]],
+                                originals: dict, min_elements: int,
+                                collect_stats: bool) -> None:
     """Replace module-level functions (e.g. transformers' apply_rotary_pos_emb).
 
-    `patches` is a list of (module_path, attr_name, replacement) tuples. We
-    import the module, save the original attribute, and overwrite. unpatch
-    walks the saved list and restores.
+    `patches` is a list of (module_path, attr_name, replacement, kernel_name)
+    tuples. We import the module, save the original attribute, and overwrite.
+    unpatch walks the saved list and restores.
+
+    Where a predicate is registered for the kernel, the replacement is wrapped so
+    each call can defer to the original. For RoPE that covers both calls too
+    small to be worth fusing and head_dim values the kernel cannot handle.
     """
     saved = []
-    for module_path, attr_name, replacement in patches:
+    for module_path, attr_name, replacement, kernel_name in patches:
         try:
             mod = importlib.import_module(module_path)
         except ImportError:
@@ -134,6 +165,17 @@ def _apply_module_level_patches(patches: List[Tuple[str, str, Callable]], origin
         original = getattr(mod, attr_name, None)
         if original is None:
             continue
+        # Installed regardless of min_elements: these predicates also decide
+        # whether the kernel *can* run on this shape at all, and turning off a
+        # performance heuristic must not turn off a compatibility check. With
+        # min_elements=0 the size half of the predicate is vacuously true.
+        predicate = MODULE_LEVEL_PREDICATES.get(kernel_name)
+        if predicate is not None:
+            replacement = with_guard(
+                kernel_name, replacement, original,
+                lambda args, kwargs, _p=predicate: _p(args, kwargs, min_elements),
+                collect_stats=collect_stats,
+            )
         saved.append((mod, attr_name, original))
         setattr(mod, attr_name, replacement)
     if saved:
@@ -149,7 +191,8 @@ def _revert_module_level_patches(originals: dict) -> None:
 # Public API
 # ----------------------------------------------------------------------------
 
-def patch(model, kernels: Optional[List[str]] = None):
+def patch(model, kernels: Optional[List[str]] = None, mode: str = "train",
+          min_elements: int = MIN_FUSED_ELEMENTS, collect_stats: bool = False):
     """Patch an HF model in place. Returns the same model object.
 
     Args:
@@ -159,17 +202,42 @@ def patch(model, kernels: Optional[List[str]] = None):
                  Pass an explicit list to bisect during debugging:
                      forge.patch(model, kernels=["embedding"])
                      forge.patch(model, kernels=["rope"])
+        mode:    "train" (default) patches everything applicable. "infer" also
+                 skips the kernels that cannot help without a backward pass —
+                 the loss kernel and both LoRA kernels — since there is no loss
+                 and no adapter gradient to compute when serving.
+        min_elements: per-call activation-element floor below which a
+                 shape-sensitive kernel defers to the original forward. The
+                 default is calibrated on an A100 in bf16; see
+                 forge.patching.kernels.common for the measurements. Pass 0 to
+                 disable the guard and patch unconditionally, which is what
+                 benchmarking a kernel in isolation wants.
+        collect_stats: count fused-vs-eager guard decisions, readable through
+                 forge.guard_stats(). Off by default: the guard is on the hot
+                 path and counting cost 2% on the small shapes it protects.
 
     Raises:
         RuntimeError if the model is already patched (call unpatch first).
-        ValueError if model.config.model_type isn't supported.
+        ValueError if model.config.model_type isn't supported, or mode is not
+            "train" or "infer".
         NotImplementedError if `kernels` names a kernel that's still a stub.
     """
     if getattr(model, "_forge_patched", False):
         raise RuntimeError("Model already patched. Call forge.unpatch(model) first.")
+    if mode not in ("train", "infer"):
+        raise ValueError(f"forge.patch: mode must be 'train' or 'infer', got {mode!r}.")
 
     arch = _detect_architecture(model)
     class_mapping, module_level_patches = _ARCH_TO_MAPPING[arch]
+
+    # In inference mode the training-only kernels are recorded as skipped rather
+    # than dropped silently, so `model._forge_skipped` explains the difference
+    # between what was asked for and what was applied.
+    skipped: Dict[str, str] = {}
+    if mode == "infer":
+        for kernel_name in sorted(TRAINING_ONLY):
+            if kernels is None or kernel_name in kernels:
+                skipped[kernel_name] = "no effect without a backward pass (mode='infer')"
 
     # --- pre-validate: fail loudly BEFORE mutating any module, so a stub in the
     # `kernels` whitelist doesn't leave the model half-patched.
@@ -208,6 +276,8 @@ def patch(model, kernels: Optional[List[str]] = None):
             # Filter by `kernels` whitelist
             if kernels is not None and kernel_name not in kernels:
                 continue
+            if kernel_name in skipped:
+                continue
 
             maker = _FORWARD_MAKERS.get(kernel_name)
             if maker is None:
@@ -217,7 +287,8 @@ def patch(model, kernels: Optional[List[str]] = None):
             if getattr(maker, "__forge_stub__", False):
                 continue
 
-            if _replace_forward(module, kernel_name, config, originals):
+            if _replace_forward(module, kernel_name, config, originals, min_elements,
+                                collect_stats):
                 patched_count[kernel_name] = patched_count.get(kernel_name, 0) + 1
                 break
 
@@ -226,18 +297,26 @@ def patch(model, kernels: Optional[List[str]] = None):
     for kernel_name, patch_spec in module_level_patches.items():
         if kernels is not None and kernel_name not in kernels:
             continue
+        if kernel_name in skipped:
+            continue
         # A kernel can patch more than one transformers module path (e.g. qwen2
-        # and qwen3 have separate modeling modules in newer transformers).
-        if isinstance(patch_spec, tuple):
-            selected_module_level.append(patch_spec)
-        else:
-            selected_module_level.extend(patch_spec)
-    _apply_module_level_patches(selected_module_level, originals)
+        # and qwen3 have separate modeling modules in newer transformers). The
+        # kernel name rides along so the guard predicate can be looked up.
+        specs = [patch_spec] if isinstance(patch_spec, tuple) else list(patch_spec)
+        selected_module_level.extend(
+            (module_path, attr_name, replacement, kernel_name)
+            for module_path, attr_name, replacement in specs
+        )
+    _apply_module_level_patches(selected_module_level, originals, min_elements,
+                               collect_stats)
 
     model._forge_originals = originals
     model._forge_patched = True
     model._forge_patched_counts = patched_count
     model._forge_arch = arch
+    model._forge_mode = mode
+    model._forge_min_elements = min_elements
+    model._forge_skipped = skipped
     return model
 
 
@@ -260,8 +339,8 @@ def unpatch(model):
 
     del model._forge_originals
     del model._forge_patched
-    if hasattr(model, "_forge_patched_counts"):
-        del model._forge_patched_counts
-    if hasattr(model, "_forge_arch"):
-        del model._forge_arch
+    for attr in ("_forge_patched_counts", "_forge_arch", "_forge_mode",
+                 "_forge_min_elements", "_forge_skipped"):
+        if hasattr(model, attr):
+            delattr(model, attr)
     return model
