@@ -34,7 +34,10 @@ jobs:
         # without torch and will flag any benchmark whose script has moved.
         run: |
           python benchmarks/bench_all.py --list | tee listing.txt
-          if grep -q '^!' listing.txt; then
+          # A missing script is flagged as "! <name>  <path>". The trailing
+          # legend line is "! = script missing from working tree", so require a
+          # non-'=' first character to avoid matching the legend itself.
+          if grep -qE '^! [^=]' listing.txt; then
             echo "::error::a benchmark script in bench_all.py is missing from the tree"
             exit 1
           fi
