@@ -45,27 +45,43 @@ jobs:
       - name: Every package is declared for packaging
         run: python scripts/check_packages_declared.py
 
-      - name: The wheel is importable without the repository
+      - name: The wheel carries the kernels
         # The wheel used to ship the patching layer and no kernels, so `import
-        # forge` worked in a checkout and failed everywhere else. Build it and
-        # import from site-packages with the repo off sys.path. torch is far too
-        # heavy for a CPU runner, so this stops at the import boundary: it proves
-        # the kernel modules are present and reachable, not that they run.
+        # forge` worked in a checkout and failed everywhere else. Install it and
+        # check the kernel modules landed in site-packages.
+        #
+        # Deliberately a filesystem check rather than an import: importing any
+        # forge submodule executes forge/__init__.py, which needs torch, and torch
+        # is far too heavy for a CPU runner. That an installed copy actually runs
+        # is verified by hand on a GPU — see CONTRIBUTING.md.
         run: |
           python -m pip install -q build
           python -m build --wheel --outdir dist/
           python -m venv /tmp/wheelcheck
           /tmp/wheelcheck/bin/pip install -q --no-deps dist/*.whl
-          cd /tmp
           /tmp/wheelcheck/bin/python - <<'PY'
-          import importlib.util as u
-          for name in ("forge", "forge.patching.core", "kernels.rope.forge_rope_v3",
-                       "kernels.lora_mlp.experiments.v6.lora_mlp_kernel_v6",
-                       "kernels.lora_mlp.reference.unsloth_baseline",
-                       "kernels.cross_entropy.experiments.v2"):
-              assert u.find_spec(name) is not None, f"{name} is not in the wheel"
-          print("all kernel modules resolve from site-packages")
+          import pathlib, sysconfig
+          site = pathlib.Path(sysconfig.get_paths()["purelib"])
+          required = [
+              "forge/__init__.py",
+              "forge/patching/core.py",
+              "forge/patching/kernels/common.py",
+              "kernels/rope/forge_rope_v3.py",
+              "kernels/rmsnorm/__init__.py",
+              "kernels/swiglu/__init__.py",
+              "kernels/cross_entropy/experiments/v2/__init__.py",
+              "kernels/embedding/experiments/v1/embedding_kernel_v1_upgrade_1.py",
+              "kernels/lora_mlp/experiments/v6/lora_mlp_kernel_v6.py",
+              # Imported at runtime by LoRA MLP v5/v6, so it has to ship.
+              "kernels/lora_mlp/reference/unsloth_baseline.py",
+              "kernels/lora_qkv/experiments/v4/lora_qkv_kernel_v4.py",
+          ]
+          missing = [name for name in required if not (site / name).is_file()]
+          for name in missing:
+              print(f"::error::{name} is missing from the installed wheel")
+          raise SystemExit(1 if missing else 0)
           PY
+          echo "all kernel modules present in site-packages"
 
       - name: Result files referenced by the README exist
         run: |
