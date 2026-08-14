@@ -1,8 +1,8 @@
 blank_issues_enabled: true
 contact_links:
   - name: Reproducing the published numbers
-    url: https://github.com/Forge-researchlab/kernel-POCs#reproducing
+    url: https://github.com/Forge-researchlab/forge-kernels#reproducing
     about: How to re-run every benchmark and test, and which files each one writes.
   - name: Where these kernels lose
-    url: https://github.com/Forge-researchlab/kernel-POCs#where-these-kernels-lose
+    url: https://github.com/Forge-researchlab/forge-kernels#where-these-kernels-lose
     about: Known regressions. Please check here before filing a slowdown — it may already be documented.

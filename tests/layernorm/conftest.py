@@ -4,7 +4,7 @@
 - Registers the `bench` marker so perf/bandwidth/launch-count/alignment files
   are deselected from the default `pytest` run and only fire under `-m bench`.
 - Seeds torch globally before each test for reproducibility.
-- Inserts the kernel-POCs root onto sys.path so `from kernels.layernorm import ...`
+- Inserts the repository root onto sys.path so `from kernels.layernorm import ...`
   works regardless of the cwd pytest is invoked from.
 """
 import os

@@ -36,8 +36,8 @@ bench = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Forge-researchlab/kernel-POCs"
-Issues = "https://github.com/Forge-researchlab/kernel-POCs/issues"
+Homepage = "https://github.com/Forge-researchlab/forge-kernels"
+Issues = "https://github.com/Forge-researchlab/forge-kernels/issues"
 
 # The distribution spans two source roots. `forge` is the public API and lives in
 # forge/forge/; the kernels it calls live in kernels/ at the repository root and

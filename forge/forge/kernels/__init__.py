@@ -1,4 +1,4 @@
-"""Forge kernels — re-exports of the POC kernels at /workspace/kernel-POCs/kernels/.
+"""Forge kernels — re-exports of the implementations in the `kernels` package.
 
 Available (real, wired into the patching layer):
     forge.kernels.rope         — ForgeRoPEv3, apply_rope    (kernels/rope/forge_rope_v3.py)
