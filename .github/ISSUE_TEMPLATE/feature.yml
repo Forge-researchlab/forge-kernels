@@ -1,0 +1,43 @@
+name: Feature
+description: A new kernel, a new model architecture to patch, or new tooling
+labels: ["feature"]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - New kernel
+        - New model architecture for forge.patch
+        - Tooling or CI
+        - Packaging or distribution
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What should exist
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it is worth the maintenance
+      description: >
+        Where is the time or memory going today, and roughly how much is
+        recoverable? A rough estimate is fine here — but it becomes a measured
+        number before the PR lands.
+    validations:
+      required: true
+
+  - type: textarea
+    id: baseline
+    attributes:
+      label: What would you benchmark it against
+      description: >
+        PyTorch eager is the minimum. Liger and Unsloth where an equivalent
+        exists, since the README compares against all three.
+      placeholder: "PyTorch eager + Liger 0.8.0, bf16, at 4x2048x11008"

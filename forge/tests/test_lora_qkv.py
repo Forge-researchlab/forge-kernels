@@ -61,7 +61,6 @@ def _summary_tensor(label, a, b, dtype, kind="forward"):
     rel = max_diff / (base_max + 1e-12)
     cos = _cos_sim(a, b)
 
-    import torch
     if kind == "forward":
         if dtype == torch.bfloat16:
             ok = (nan == 0 and inf == 0 and max_diff < 5e-2 and cos > 0.999)

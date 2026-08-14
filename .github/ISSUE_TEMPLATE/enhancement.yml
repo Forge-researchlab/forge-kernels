@@ -1,0 +1,42 @@
+name: Enhancement
+description: Improve something that already works — speed, memory, API, or docs
+labels: ["enhancement"]
+body:
+  - type: input
+    id: target
+    attributes:
+      label: What are you improving
+      placeholder: "kernels/embedding — sort-and-group backward"
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: Current behaviour, with numbers
+      description: >
+        Quote the committed result file if there is one. Shape, dtype, and
+        baseline please — a ratio without them is not actionable.
+      placeholder: |
+        0.31x vs PyTorch eager at v=32000, d=768, s=512 (bf16), from
+        kernels/embedding/benchmarks/results/bench_20260814_044005.csv
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      placeholder: |
+        Dispatch to F.embedding below a dimension threshold, so small-dim shapes
+        tie with eager instead of losing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: tradeoff
+    attributes:
+      label: Expected trade-off
+      description: >
+        Most changes here trade latency against memory or generality against
+        speed. Say which way this one goes and what could regress.

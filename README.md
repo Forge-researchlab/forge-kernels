@@ -2,7 +2,16 @@
 
 Triton kernels for LLM fine-tuning, benchmarked against PyTorch eager, [Liger Kernel](https://github.com/linkedin/Liger-Kernel), and [Unsloth](https://github.com/unslothai/unsloth), plus a `forge` package that patches them into Hugging Face Qwen and Gemma models.
 
-Built during the [Forge Hackathon](https://xhitijc2.github.io/forge-hackathon-plan/index.html) (May 23–24, 2026) and extended afterwards. **All work is merged into `main`** — there are no feature branches to hunt through.
+Built during the [Forge Hackathon](https://xhitijc2.github.io/forge-hackathon-plan/index.html) (May 23–24, 2026) and extended afterwards. **All work is merged into `main`** — there are no feature branches to hunt through. The pre-cleanup hackathon tree, including the working notes under `context/`, is preserved on the `hackathon-archive` branch.
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). The one hard rule
+is that a performance claim needs a committed result file behind it; [this
+repository has already been bitten](#fused-linear-cross-entropy-what-the-first-measurement-found)
+by a kernel whose harness had never been run. Benchmark results from GPUs other
+than an A100-80GB are the most useful thing you can add right now, since every
+number here comes from one card.
+
+Licensed under [Apache-2.0](LICENSE).
 
 ## Results
 

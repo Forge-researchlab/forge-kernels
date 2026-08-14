@@ -1,0 +1,62 @@
+name: Bug
+description: Something is broken, produces wrong results, or crashes
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Several bugs in this repository were version-specific or shape-specific,
+        so the environment and shape fields below are the ones that usually
+        matter most.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Include the full traceback or the incorrect numbers.
+      placeholder: |
+        Running kernels/embedding/benchmarks/bench_embedding.py aborts on the
+        first bf16 config with: ValueError: atomic_add does not support bf16
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The exact command, including any CUDA_VISIBLE_DEVICES or PYTHONPATH you used.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: shape
+    attributes:
+      label: Shape and dtype
+      description: Many issues here only appear at particular sizes.
+      placeholder: "BT=8192, hidden=4096, vocab=128256, bf16"
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: "Output of: python -c \"import torch, triton; print(torch.__version__, triton.__version__, torch.cuda.get_device_name(0))\""
+      placeholder: "2.4.1+cu121 3.0.0 NVIDIA A100-SXM4-80GB"
+      render: shell
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: gpu-idle
+    attributes:
+      label: If this is a performance bug
+      options:
+        - label: I confirmed with nvidia-smi that the GPU was idle, because contention halves every provider's numbers including the baseline
+          required: false

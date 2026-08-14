@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# GitHub-hosted runners have no GPU, so this workflow deliberately checks only
+# what is checkable on CPU: lint, syntax, and that the benchmark registry still
+# points at files that exist. Kernel correctness and every performance number
+# require an A100 and are run by hand — see CONTRIBUTING.md.
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Ruff
+        run: uvx ruff check .
+
+  structure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Everything parses
+        run: python -m compileall -q benchmarks forge kernels tests
+
+      - name: Benchmark registry resolves
+        # bench_all.py --list imports only the standard library, so it runs
+        # without torch and will flag any benchmark whose script has moved.
+        run: |
+          python benchmarks/bench_all.py --list | tee listing.txt
+          if grep -q '^!' listing.txt; then
+            echo "::error::a benchmark script in bench_all.py is missing from the tree"
+            exit 1
+          fi
+
+      - name: Result files referenced by the README exist
+        run: |
+          status=0
+          while read -r path; do
+            [ -e "$path" ] || { echo "::error::README links missing path: $path"; status=1; }
+          done < <(grep -oP '\]\(\K[^)#][^)]*' README.md | grep -vE '^https?://' | sed 's/#.*//' | sort -u)
+          exit $status

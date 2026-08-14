@@ -22,3 +22,27 @@ dev = [
 markers = [
     "slow: larger GPU correctness cases that are useful before benchmarking",
 ]
+
+[tool.ruff]
+line-length = 120
+extend-exclude = [
+    # Vendored Unsloth and Liger sources kept verbatim for comparison. Their
+    # style is not ours to change, and reformatting them would destroy the
+    # diffability that makes them useful as references.
+    "kernels/*/docs/artifacts",
+    "kernels/*/reference",
+]
+
+[tool.ruff.lint]
+# Deliberately narrow. The tree carries ~700 stylistic findings inherited from
+# notebook-derived benchmark scripts, and mass-reformatting them would bury the
+# per-version kernel history that docs/analysis/ refers to. What is enforced
+# here is the subset that catches genuine breakage: syntax errors, undefined
+# names, and comparison mistakes. Widen it per-directory as files get cleaned.
+select = ["E9", "F63", "F7", "F82", "F811"]
+
+[tool.ruff.lint.per-file-ignores]
+# `del params, X` at the end of run_config frees benchmark memory, after which
+# ruff treats every closure reference to those names as possibly-unbound. The
+# closures all run before the del.
+"kernels/lora_mlp/benchmarks/bench_memory.py" = ["F821"]
