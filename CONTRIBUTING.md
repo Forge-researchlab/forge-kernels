@@ -55,8 +55,7 @@ pinned deliberately (`torch>=2.4,<2.5`, `triton>=3.0,<3.1`) because the recorded
 numbers are tied to them.
 
 ```bash
-uv sync --dev
-uv pip install transformers peft matplotlib   # only needed for forge/demos and forge/tests
+uv sync --dev   # includes transformers, peft, and matplotlib for forge/demos and forge/tests
 ```
 
 ## Before opening a pull request

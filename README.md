@@ -127,6 +127,31 @@ Unsloth's backward returns `None` for dW/dB by design, so a full gradcheck on it
 must fail.
 
 
+## Install
+
+To use the kernels in your own training script:
+
+```bash
+pip install git+https://github.com/Forge-researchlab/kernel-POCs.git
+```
+
+```python
+import forge
+from transformers import AutoModelForCausalLM
+
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B", torch_dtype="bfloat16")
+forge.patch(model)          # fine-tuning; use mode="infer" when serving
+```
+
+That installs two import packages, `forge` and `kernels`. The generic top-level
+name `kernels` is a wart inherited from the layout and is worth fixing before any
+PyPI release ([#16](https://github.com/Forge-researchlab/kernel-POCs/issues/16)).
+
+`transformers` is pinned below 5.0 deliberately. Version 5 requires `torch>=2.5`,
+and against the `torch<2.5` pin here it does not fail loudly — it disables its own
+torch backend, and every `AutoModel` call then raises "requires the PyTorch
+library but it was not found".
+
 ## Reproducing
 
 Requires a CUDA GPU. Results above are from an A100-80GB; other hardware will differ.
@@ -306,7 +331,8 @@ single-GPU reference, not a speedup from scaling.
 
 Kept here so the repo does not overstate itself:
 
-- `transformers`, `peft`, and `matplotlib` are needed by `forge/demos/` and `forge/tests/` but are declared only in [`forge/pyproject.toml`](forge/pyproject.toml), not in the root [`pyproject.toml`](pyproject.toml).
+- **The distribution declares its packages by hand.** `kernels/` mostly predates any packaging and has no `__init__.py`, so setuptools cannot auto-discover it without namespace discovery, which then makes the two-source-root mapping ambiguous. [`scripts/check_packages_declared.py`](scripts/check_packages_declared.py) runs in CI to catch a new kernel that was never added to the list, but the list still has to be edited.
+- **The vendored Unsloth baseline ships in the wheel.** `kernels/lora_mlp/reference/unsloth_baseline.py` is imported at runtime by LoRA MLP v5/v6, so it cannot be excluded. Attribution needs sorting out before any PyPI release ([#16](https://github.com/Forge-researchlab/kernel-POCs/issues/16)).
 - **Every kernel suite must run in its own pytest process.** Each kernel puts its own `experiments/` package on `sys.path` under the same top-level name, so whichever is imported first wins and the others resolve to the wrong kernel. Collecting `lora_mlp`, `lora_qkv`, and `cross_entropy` together fails with `No module named 'experiments.v4.lora_qkv_kernel_v4'` and `cannot import name 'CrossEntropyOutput' from 'experiments.v2'`; embedding and cross-entropy collide the same way. Run separately, all 660 tests pass. The real fix is to make these proper subpackages (`kernels.<name>.experiments.v1`) instead of relying on `sys.path` insertion.
 - **Benchmark latencies on a shared box are not trustworthy.** A pass taken while another tenant held the GPU reported every provider, PyTorch baseline included, at roughly half speed. Peak-memory figures are unaffected. Check `nvidia-smi` before believing a latency number.
 - `tests/` at the top level only covers SwiGLU, GeGLU, RMSNorm, and LayerNorm. Every other kernel's suite lives under `kernels/<name>/tests/`, which is easy to miss.
