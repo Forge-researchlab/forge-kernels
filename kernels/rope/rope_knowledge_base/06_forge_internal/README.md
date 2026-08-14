@@ -9,7 +9,7 @@ From `forge_learning/`:
 - `module_4_kernel_math/02_gradient_derivation_rope.md` → save here as `02_gradient_derivation_rope.md`
 - `module_5_kernel_implementation/02_rope_triton_kernel.md` → save here as `02_rope_triton_kernel.md`
 
-These are referenced in the hackathon's H2 task steps (`context/forge_hackathon_site/day1.html`, recommended steps 1 and 2). They represent the Forge team's pre-existing position on this kernel's math and Triton implementation — must read **before** the external sources so the comparative study is grounded in what we've already decided internally.
+These are referenced in the hackathon's H2 task steps (`context/forge_hackathon_site/day1.html`, recommended steps 1 and 2 — the hackathon site is not part of the published tree; see the `hackathon-archive` branch). They represent the Forge team's pre-existing position on this kernel's math and Triton implementation — must read **before** the external sources so the comparative study is grounded in what we've already decided internally.
 
 ## How to get them
 

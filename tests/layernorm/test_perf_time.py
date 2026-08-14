@@ -12,7 +12,13 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from benchmarks.harness import _sync_and_time
+pytest.importorskip(
+    "benchmarks.harness",
+    reason="benchmarks/harness.py was never committed; the LayerNorm timing "
+           "figures in the README come from layernorm_tests.executed.ipynb",
+)
+
+from benchmarks.harness import _sync_and_time  # noqa: E402
 from kernels.layernorm import (
     ForgeLayerNormLigerFunction,
     ForgeLayerNormUnslothFunction,

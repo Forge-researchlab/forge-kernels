@@ -93,17 +93,38 @@ comparison against Liger's default configuration, not a claim about its ceiling.
 ### Correctness
 
 
-| Kernel        | Recorded result                                                            | fp64 gradcheck                       |
-| ------------- | -------------------------------------------------------------------------- | ------------------------------------ |
-| RoPE v3       | forward 30/30, backward 8/8                                                | PASS                                 |
-| LayerNorm     | 89 pass, 0 fail                                                            | 3/3 PASS                             |
-| LoRA MLP      | 152 tests pass                                                             | PASS (v2, v5, v6)                    |
-| SwiGLU        | 75 pass                                                                    | not run                              |
-| LoRA QKV v4   | 18 tests pass                                                              | PASS (MHA, GQA, r=4/8/16)            |
-| RMSNorm v4    | results committed under [`tests/results/`](kernels/rmsnorm/tests/results/) | —                                    |
-| Cross-Entropy | 105 pass, 0 fail (incl. fused linear CE)                                   | uses `assert_close`, not `gradcheck` |
-| Embedding     | 15 pass, 0 fail (fp32 + bf16, padding_idx, duplicate rows)                 | uses `assert_close`, not `gradcheck` |
-| GeGLU         | no run committed                                                           | explicitly deferred                  |
+All counts below are from a full re-run on 2026-08-14, each suite in its own
+process, on an idle A100-80GB. 660 pass, 4 skip, 1 xfail, 0 fail.
+
+| Kernel        | Recorded result                                                    | fp64 gradcheck                       |
+| ------------- | ------------------------------------------------------------------ | ------------------------------------ |
+| RoPE v3       | 4 pass (forward 30/30, backward 8/8 inside them)                   | PASS                                 |
+| LayerNorm     | 98 pass, 4 skip, 1 xfail                                           | 3/3 PASS                             |
+| LoRA MLP      | 152 pass                                                           | PASS (v2, v5, v6)                    |
+| SwiGLU        | 75 pass                                                            | not run                              |
+| LoRA QKV v4   | 90 pass                                                            | PASS (MHA, GQA, r=4/8/16)            |
+| RMSNorm v4    | 32 pass (14 top-level + 18 under `kernels/rmsnorm/tests/`)         | —                                    |
+| Cross-Entropy | 105 pass (incl. fused linear CE)                                   | uses `assert_close`, not `gradcheck` |
+| Embedding     | 15 pass (fp32 + bf16, padding_idx, duplicate rows)                 | uses `assert_close`, not `gradcheck` |
+| GeGLU         | 89 pass                                                            | explicitly deferred                  |
+
+Two entries in this table were wrong before this run and are worth flagging:
+GeGLU was recorded as having no committed run when its 89 tests pass, and the
+whole `tests/` directory could not be collected at all — `tests/layernorm/` is a
+package, so pytest put `tests/` on `sys.path` instead of the repository root and
+all nine LayerNorm modules died on `import kernels`. A root `conftest.py` fixes
+it.
+
+Making them collectable surfaced four real failures, all in the Liger dW/dB
+comparison against eager in fp32 at the larger shapes. They were tolerance, not
+gradient: the two disagree by 1–6 fp32 epsilons relative to `|dW|max` because the
+kernel's block-partial reduction accumulates in a different order. Checked
+against a float64 reference, the *kernel* is closer to the truth than eager at
+every shape above one row (ratios 0.57–0.74), so a flat `atol=1e-5` was failing
+the more accurate of the two results. The bound now scales with the gradient
+magnitude. The single xfail is unrelated and deliberate — it documents that
+Unsloth's backward returns `None` for dW/dB by design, so a full gradcheck on it
+must fail.
 
 
 ## Reproducing
@@ -124,13 +145,22 @@ python kernels/rope/benchmarks/bench_v3.py
 python kernels/swiglu/benchmarks/benchmark_swiglu.py --suite a100 --dtype bf16 --save results/swiglu_a100_bf16.csv
 ```
 
-Tests:
+Tests. **Each kernel suite must run in its own pytest process** — see Known gaps
+for why combining them fails:
 
 ```bash
-pytest tests/                             # SwiGLU, GeGLU, RMSNorm, LayerNorm
-pytest kernels/lora_mlp/tests/ kernels/lora_qkv/tests/ kernels/cross_entropy/tests/
-pytest kernels/embedding/tests/           # must be its own process, see Known gaps
+pytest tests/                        # SwiGLU, GeGLU, RMSNorm, LayerNorm — 276 pass, 4 skip, 1 xfail
+pytest kernels/lora_mlp/tests/       # 152 pass
+pytest kernels/lora_qkv/tests/       # 90 pass
+pytest kernels/cross_entropy/tests/  # 105 pass, incl. fused linear CE
+pytest kernels/embedding/tests/      # 15 pass
+pytest kernels/rmsnorm/tests/        # 18 pass
+pytest kernels/rope/tests/           # 4 pass
 ```
+
+That is 660 passing tests, all re-run on 2026-08-14. The 4 skips are the
+LayerNorm perf tests, which import a `benchmarks/harness.py` that was never
+committed.
 
 The `forge` integration checks need the package plus a real model, and the FSDP2
 ones need two GPUs:
@@ -186,10 +216,11 @@ Artifacts land in [`artifacts/lora_demo_qwen/`](artifacts/lora_demo_qwen/) and
 Kept here so the repo does not overstate itself:
 
 - `transformers`, `peft`, and `matplotlib` are needed by `forge/demos/` and `forge/tests/` but are declared only in [`forge/pyproject.toml`](forge/pyproject.toml), not in the root [`pyproject.toml`](pyproject.toml).
-- **`kernels/embedding/tests/` must run in its own pytest process.** It and `kernels/cross_entropy/tests/` both put an `experiments/` package on `sys.path`; cross-entropy has `experiments/v1/__init__.py`, so collecting both together resolves `experiments.v1` to the wrong kernel and the embedding import fails.
+- **Every kernel suite must run in its own pytest process.** Each kernel puts its own `experiments/` package on `sys.path` under the same top-level name, so whichever is imported first wins and the others resolve to the wrong kernel. Collecting `lora_mlp`, `lora_qkv`, and `cross_entropy` together fails with `No module named 'experiments.v4.lora_qkv_kernel_v4'` and `cannot import name 'CrossEntropyOutput' from 'experiments.v2'`; embedding and cross-entropy collide the same way. Run separately, all 660 tests pass. The real fix is to make these proper subpackages (`kernels.<name>.experiments.v1`) instead of relying on `sys.path` insertion.
 - **Benchmark latencies on a shared box are not trustworthy.** A pass taken while another tenant held the GPU reported every provider, PyTorch baseline included, at roughly half speed. Peak-memory figures are unaffected. Check `nvidia-smi` before believing a latency number.
 - `tests/` at the top level only covers SwiGLU, GeGLU, RMSNorm, and LayerNorm. Every other kernel's suite lives under `kernels/<name>/tests/`, which is easy to miss.
 - GeGLU fp64 gradcheck is deferred.
+- **LayerNorm has no committed perf tests.** Four of them exist under `tests/layernorm/` but import a `benchmarks/harness.py` that was never committed, so they have never run and are now skipped explicitly. The LayerNorm figures come from [`layernorm_tests.executed.ipynb`](kernels/layernorm/layernorm_tests.executed.ipynb), which is the weakest form of evidence here.
 - `ForgeRMSNorm` does not accept Gemma's `offset` parameter, so `forge.patch` skips RMSNorm on Gemma models.
 - The LoRA QKV v4 CSV disagrees with the numbers in its own `CHANGELOG.md` and analysis doc; the table above uses the CHANGELOG figures, and the discrepancy is unresolved.
 

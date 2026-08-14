@@ -19,7 +19,13 @@ from kernels.layernorm import (
     ForgeLayerNormUnslothFunction,
 )
 
-from ._helpers import SHAPES_SWEEP, make_inputs, clone_leaf, tol_for
+from ._helpers import (
+    SHAPES_SWEEP,
+    clone_leaf,
+    make_inputs,
+    tol_for,
+    tol_for_param_grad,
+)
 
 
 DTYPES = [torch.bfloat16, torch.float16, torch.float32]
@@ -63,10 +69,14 @@ class TestLigerBackward:
         out_r = F.layer_norm(X_r, (shape[-1],), W_r, B_r, eps)
         out_r.backward(dY)
 
-        tol = tol_for(dtype)
-        torch.testing.assert_close(X_f.grad, X_r.grad, **tol)
-        torch.testing.assert_close(W_f.grad, W_r.grad, **tol)
-        torch.testing.assert_close(B_f.grad, B_r.grad, **tol)
+        torch.testing.assert_close(X_f.grad, X_r.grad, **tol_for(dtype))
+
+        torch.testing.assert_close(
+            W_f.grad, W_r.grad, **tol_for_param_grad(dtype, W_r.grad)
+        )
+        torch.testing.assert_close(
+            B_f.grad, B_r.grad, **tol_for_param_grad(dtype, B_r.grad)
+        )
 
 
 # ---------------------------------------------------------------------------

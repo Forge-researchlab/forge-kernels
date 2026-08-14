@@ -5,7 +5,7 @@ applied to lora_qkv and lora_mlp. Verifies forward parity, gradient parity,
 memory sharding, greedy-generate parity, and training-loop parity vs a
 single-GPU reference baked by rank 0.
 
-Phase 3 of the V1 plan. Design locked in context/phase3_fsdp2_resume.md.
+Phase 3 of the V1 plan. Design locked in docs/phase3_fsdp2_design.md.
 
 Run:
     torchrun --nproc-per-node=2 --standalone forge/tests/verify_fsdp2_lora_gemma.py

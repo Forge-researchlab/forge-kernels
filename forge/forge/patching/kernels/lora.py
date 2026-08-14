@@ -145,7 +145,7 @@ def make_lora_mlp_forward(module, config):
     activation = _detect_mlp_activation(module)
 
     if activation == "silu":
-        # FSDP2-safe path (see context/phase3_fsdp2_resume.md §7). Going
+        # FSDP2-safe path (see docs/phase3_fsdp2_design.md §7). Going
         # through PEFT submodules (gate/up/down_proj) lets FSDP2's all-gather
         # hooks fire on each weight access. The earlier LoRAMLPv3-fused path
         # closed over raw `module.*.base_layer.weight` refs which break under
@@ -193,7 +193,7 @@ def make_lora_qkv_forward(module, config):
 
     Routes Q/K/V through PEFT's wrapped Linear submodules (`module.q_proj(x)`
     etc.) instead of closing over raw weight tensors at patch time. This is
-    the locked Phase 3 design (see `context/phase3_fsdp2_resume.md` §7): when
+    the locked Phase 3 design (see `docs/phase3_fsdp2_design.md` §7): when
     FSDP2 shards a Linear's weight, all-gather is triggered by the submodule
     `forward` hook chain. Bypassing it with a raw tensor pointer captured at
     patch time leaves the closure pointing at a stale shard, which crashes

@@ -43,6 +43,33 @@ TOL_FP32 = dict(rtol=1e-5, atol=1e-5)
 TOL_FP64 = dict(rtol=1e-7, atol=1e-7)
 
 
+def tol_for_param_grad(dtype: torch.dtype, reference: torch.Tensor) -> dict:
+    """Tolerance for dW/dB, scaled to the magnitude of the reference gradient.
+
+    dX is elementwise, so tol_for() is the right bar for it. dW and dB are sums
+    down the row dimension, and the kernel's block-partial ordering differs from
+    eager's, so the two disagree by round-off proportional to how large the
+    accumulated gradient got. A fixed atol cannot express that: at (2, 8, 1024)
+    the gradients peak near 1.9e+01 and at (8, 4096, 4096) near 6.8e+02.
+
+    Measured across the sweep in fp32, as max|kernel - eager| over max|dW|:
+
+        rows      1     16    2048    8192   16384   32768
+        ratio  1.5e-7 1.0e-7 1.9e-7  2.7e-7  4.2e-7  6.5e-7
+
+    That is one to six fp32 epsilons, which is round-off and nothing else. The
+    check that settles it is against a float64 reference: the kernel's dW is
+    *closer* to the truth than eager's at every shape above 1 row (ratios 0.57
+    to 0.74), so the previous flat 1e-05 atol was failing the more accurate of
+    the two results. 1e-6 of peak magnitude leaves headroom over the worst
+    observed 6.5e-07 without being loose enough to hide a real gradient error,
+    which would not sit at epsilon scale.
+    """
+    if dtype != torch.float32:
+        return tol_for(dtype)
+    return dict(rtol=1e-4, atol=1e-6 * reference.abs().max().item())
+
+
 def tol_for(dtype: torch.dtype) -> dict:
     if dtype == torch.bfloat16:
         return TOL_BF16

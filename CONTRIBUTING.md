@@ -46,15 +46,21 @@ uv pip install transformers peft matplotlib   # only needed for forge/demos and 
 
 ```bash
 uv run ruff check .
-uv run pytest tests/
-uv run pytest kernels/lora_mlp/tests/ kernels/lora_qkv/tests/ kernels/cross_entropy/tests/
-uv run pytest kernels/embedding/tests/        # must be a separate process, see below
+uv run pytest tests/                        # 276 pass, 4 skip, 1 xfail
+uv run pytest kernels/lora_mlp/tests/       # 152
+uv run pytest kernels/lora_qkv/tests/       # 90
+uv run pytest kernels/cross_entropy/tests/  # 105
+uv run pytest kernels/embedding/tests/      # 15
+uv run pytest kernels/rmsnorm/tests/        # 18
+uv run pytest kernels/rope/tests/           # 4
 ```
 
-`kernels/embedding/tests/` cannot share a pytest process with
-`kernels/cross_entropy/tests/`: both put an `experiments/` package on
-`sys.path`, and cross-entropy's `experiments/v1/__init__.py` wins, so the
-embedding import resolves to the wrong kernel.
+**Run each kernel suite as its own process.** Every kernel puts its own
+`experiments/` package on `sys.path` under the same top-level name, so whichever
+gets imported first wins and the rest resolve to the wrong kernel. Combining
+them produces errors that look like missing code but are not — for example
+`No module named 'experiments.v4.lora_qkv_kernel_v4'`. Separately, all 660 tests
+pass.
 
 If you changed a kernel, run its benchmark as well:
 
