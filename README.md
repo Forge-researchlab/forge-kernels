@@ -22,8 +22,8 @@ vs Liger) with forward 30/30, backward 8/8 and fp64 gradcheck passing, and RMSNo
 | **RMSNorm** (v4)           | **10.2×** fwd         | PyTorch eager          | 2×2048×4096, bf16, offset=1.0       | [`v4_summary.md`](kernels/rmsnorm/benchmarks/results/v4_summary.md)                  |
 | **SwiGLU**                 | **6.5×** fwd          | PyTorch eager (packed) | 4×2048×11008, bf16                  | [`swiglu_a100_bf16.csv`](results/swiglu_a100_bf16.csv)                               |
 |                            | 1.5× fwd              | Liger                  | 4×2048×11008, bf16, mult 0.7/1.3    | [`..._with_liger.csv`](results/swiglu_a100_bf16_with_liger.csv)                      |
-| **GeGLU** (activation)     | **5.2×** fwd+bwd      | PyTorch eager (packed) | 4×2048×11008, bf16, tanh            | [`geglu_activation_a100_bf16.csv`](geglu_activation_a100_bf16.csv)                   |
-| **GeGLU** (gate+up fusion) | **1.40×** fwd         | separate PyTorch MLP   | 1×512×4096, i=11008, bf16           | [`geglu_gateup_a100_bf16.csv`](geglu_gateup_a100_bf16.csv)                           |
+| **GeGLU** (activation)     | **5.2×** fwd+bwd      | PyTorch eager (packed) | 4×2048×11008, bf16, tanh            | [`geglu_activation_a100_bf16.csv`](results/geglu_activation_a100_bf16.csv)           |
+| **GeGLU** (gate+up fusion) | **1.40×** fwd         | separate PyTorch MLP   | 1×512×4096, i=11008, bf16           | [`geglu_gateup_a100_bf16.csv`](results/geglu_gateup_a100_bf16.csv)                   |
 | **LoRA QKV** (v4)          | **1.37×** fwd+bwd     | Unsloth                | 4×2048, h=4096, GQA 32/8, r=8, bf16 | [`CHANGELOG.md`](kernels/lora_qkv/CHANGELOG.md)                                      |
 | **LoRA MLP** (v6)          | **1.18×** fwd         | Unsloth                | 4×2048, h=4096, i=14336, r=16, bf16 | [`v6_upgrade_1_latency_*.csv`](kernels/lora_mlp/benchmarks/results/)                 |
 | **LayerNorm**              | **1.57×** fwd+bwd     | PyTorch eager          | 8×2048×4096, fp32                   | [`layernorm_tests.executed.ipynb`](kernels/layernorm/layernorm_tests.executed.ipynb) |
@@ -153,7 +153,7 @@ forge/                    # installable package: kernels + HF patching layer
 benchmarks/bench_all.py   # runs every benchmark above
 docs/                     # per-kernel research notes
 artifacts/                # LoRA demo curves, FSDP2 analysis dashboards
-results/                  # top-level SwiGLU CSVs
+results/                  # SwiGLU and GeGLU CSVs
 ```
 
 The `forge` package is the integration story: `forge.patch(model)` swaps kernels into a live Hugging Face model, with architecture detection for `qwen2`, `qwen3`, `gemma`, and `gemma2`, and an idempotent `unpatch`. See [`forge/forge/patching/core.py`](forge/forge/patching/core.py).
@@ -176,10 +176,10 @@ Artifacts land in [`artifacts/lora_demo_qwen/`](artifacts/lora_demo_qwen/) and
 
 Kept here so the repo does not overstate itself:
 
-- `requirements.txt` is empty — dependencies live in [`pyproject.toml`](pyproject.toml) and `uv.lock`. `transformers`, `peft`, and `matplotlib` are needed by `forge/demos/` and `forge/tests/` but are declared only in [`forge/pyproject.toml`](forge/pyproject.toml).
+- `transformers`, `peft`, and `matplotlib` are needed by `forge/demos/` and `forge/tests/` but are declared only in [`forge/pyproject.toml`](forge/pyproject.toml), not in the root [`pyproject.toml`](pyproject.toml).
 - **`kernels/embedding/tests/` must run in its own pytest process.** It and `kernels/cross_entropy/tests/` both put an `experiments/` package on `sys.path`; cross-entropy has `experiments/v1/__init__.py`, so collecting both together resolves `experiments.v1` to the wrong kernel and the embedding import fails.
 - **Benchmark latencies on a shared box are not trustworthy.** A pass taken while another tenant held the GPU reported every provider, PyTorch baseline included, at roughly half speed. Peak-memory figures are unaffected. Check `nvidia-smi` before believing a latency number.
-- `tests/test_cross_entropy.py`, `test_lora_mlp.py`, `test_lora_qkv.py`, and `test_rope.py` at the top level are empty placeholders. The real suites are under `kernels/<name>/tests/`.
+- `tests/` at the top level only covers SwiGLU, GeGLU, RMSNorm, and LayerNorm. Every other kernel's suite lives under `kernels/<name>/tests/`, which is easy to miss.
 - GeGLU fp64 gradcheck is deferred.
 - `ForgeRMSNorm` does not accept Gemma's `offset` parameter, so `forge.patch` skips RMSNorm on Gemma models.
 - The LoRA QKV v4 CSV disagrees with the numbers in its own `CHANGELOG.md` and analysis doc; the table above uses the CHANGELOG figures, and the discrepancy is unresolved.

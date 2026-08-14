@@ -16,3 +16,12 @@ ENV/
 .benchmarks/
 *.prof
 wandb/
+
+# Editor / agent configuration, kept out of the published tree
+.cursor/
+
+# Hackathon working notes and the internal site submodule; see hackathon-archive
+context/
+
+# Triton autotune cache written next to the kernels
+compiled_cache.db
