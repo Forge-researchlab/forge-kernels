@@ -310,6 +310,8 @@ def run_config(
             up["W"], up["A"], up["B"], up["s"],
             dp["W"], dp["A"], dp["B"], dp["s"],
             None,   # A_stack (None → repack inside forward)
+            None,   # W_gate_stack
+            None,   # W_down_stack
             False,  # enable_streams
             None,   # side_stream
         )
@@ -329,6 +331,8 @@ def run_config(
             up["W"], up["A"], up["B"], up["s"],
             dp["W"], dp["A"], dp["B"], dp["s"],
             None,  # A_stack
+            None,  # W_gate_stack
+            None,  # W_down_stack
             True,  # enable_streams
             None,  # side_stream
         )

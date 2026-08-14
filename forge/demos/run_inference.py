@@ -28,7 +28,8 @@ from pirate_dataset import HELD_OUT_PROMPTS, build_prompt
 
 
 MODEL_ID = "google/gemma-2-2b"
-ARTIFACTS_DIR = Path("/workspace/kernel-POCs/artifacts/lora_demo")
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ARTIFACTS_DIR = REPO_ROOT / "artifacts" / "lora_demo"
 ADAPTER_DIR = ARTIFACTS_DIR / "lora_adapter"
 OUT_PATH = ARTIFACTS_DIR / "inference_samples.md"
 

@@ -15,6 +15,7 @@ Usage:
 import argparse
 import csv
 import itertools
+import math
 import os
 import time
 from pathlib import Path
@@ -43,7 +44,7 @@ except ImportError:
 # Benchmark helpers
 # ---------------------------------------------------------------------------
 def pytorch_embedding_forward_backward(weight, indices):
-    emb = torch.nn.functional.embedding(weight, indices)
+    emb = torch.nn.functional.embedding(indices, weight)
     loss = emb.sum()
     loss.backward()
     return weight.grad
@@ -61,6 +62,20 @@ def liger_embedding_forward_backward(weight, indices):
     loss = out.sum()
     loss.backward()
     return weight.grad
+
+
+def bench_reference(fn, weight, indices):
+    """Time a reference kernel, tolerating dtypes it cannot compile for.
+
+    The vendored Liger backward uses tl.atomic_add, which Triton 3.0 rejects for
+    bf16, so that column is simply absent for bf16 rows rather than aborting the
+    sweep.
+    """
+    try:
+        return bench_fn(fn, weight, indices)
+    except Exception as exc:
+        print(f"    reference unavailable: {type(exc).__name__}: {str(exc).splitlines()[-1]}")
+        return float("nan")
 
 
 def bench_fn(fn, weight, indices, warmup=5, rep=20):
@@ -128,24 +143,26 @@ def run_sweep(configs, save_dir=None):
 
         pt_ms = bench_fn(pytorch_embedding_forward_backward, weight, indices)
         forge_ms = bench_fn(forge_embedding_forward_backward, weight, indices)
-        liger_ms = bench_fn(liger_embedding_forward_backward, weight, indices) if HAS_LIGER else float("nan")
+        liger_ms = (bench_reference(liger_embedding_forward_backward, weight, indices)
+                    if HAS_LIGER else float("nan"))
 
         forge_speedup = pt_ms / forge_ms
-        liger_speedup = pt_ms / liger_ms if HAS_LIGER else float("nan")
+        have_liger = not math.isnan(liger_ms)
+        liger_speedup = pt_ms / liger_ms if have_liger else float("nan")
 
         row = {
             "vocab_size": vocab, "embedding_dim": dim, "seq_len": seq,
             "dtype": dtype_str, "dup_ratio": dup_ratio, "n_unique": n_unique,
             "pytorch_ms": f"{pt_ms:.3f}", "forge_ms": f"{forge_ms:.3f}",
-            "liger_ms": f"{liger_ms:.3f}",
+            "liger_ms": f"{liger_ms:.3f}" if have_liger else "N/A",
             "forge_speedup": f"{forge_speedup:.2f}x",
-            "liger_speedup": f"{liger_speedup:.2f}x" if HAS_LIGER else "N/A",
+            "liger_speedup": f"{liger_speedup:.2f}x" if have_liger else "N/A",
         }
         results.append(row)
 
         print(f"V={vocab:>7} D={dim:>4} S={seq:>5} {dtype_str:>4} dup={dup_ratio:.1f} | "
               f"PT={pt_ms:7.3f}ms  Forge={forge_ms:7.3f}ms ({forge_speedup:.2f}x)"
-              + (f"  Liger={liger_ms:7.3f}ms ({liger_speedup:.2f}x)" if HAS_LIGER else ""))
+              + (f"  Liger={liger_ms:7.3f}ms ({liger_speedup:.2f}x)" if have_liger else ""))
 
     if save_dir:
         os.makedirs(save_dir, exist_ok=True)

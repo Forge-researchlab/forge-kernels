@@ -22,7 +22,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-ARTIFACTS_DIR = Path("/workspace/kernel-POCs/artifacts/lora_demo")
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ARTIFACTS_DIR = REPO_ROOT / "artifacts" / "lora_demo"
 LOG_PATH = ARTIFACTS_DIR / "train_log.jsonl"
 META_PATH = ARTIFACTS_DIR / "run_meta.json"
 

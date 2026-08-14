@@ -26,7 +26,10 @@ if _PKG_ROOT not in sys.path:
 
 import torch
 import torch.distributed as dist
-from torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy
+try:
+    from torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy
+except ImportError:  # torch < 2.6 keeps FSDP2 under the private namespace
+    from torch.distributed._composable.fsdp import fully_shard, MixedPrecisionPolicy
 
 import forge  # triggers POC-root sys.path injection for forge.kernels.*
 

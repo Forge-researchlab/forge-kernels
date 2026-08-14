@@ -18,6 +18,11 @@ from .cross_entropy_kernel_v2 import MAX_FUSED_SIZE
 from .cross_entropy_kernel_v2 import _element_mul_kernel
 from .cross_entropy_kernel_v2 import forge_cross_entropy_kernel
 
+# Transient logits-chunk budget used to pick a default chunk_size. Peak memory is
+# dominated by the (V, H) weight gradient, not by this chunk, so the budget only
+# needs to keep the chunk well below that floor.
+LOGITS_CHUNK_BUDGET_BYTES = 512 * 1024**2
+
 
 __all__ = [
     "ForgeFusedLinearCrossEntropyFunction",
@@ -44,6 +49,7 @@ def fused_linear_cross_entropy_forward(
     use_token_scaling: bool = False,
     return_token_accuracy: bool = False,
     return_predicted_tokens: bool = False,
+    chunk_size: Optional[int] = None,
 ):
     """Chunked ``linear + cross_entropy`` without materializing full logits.
 
@@ -129,8 +135,18 @@ def fused_linear_cross_entropy_forward(
     block_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(V))
     # Choose a token chunk so the temporary logits chunk is roughly comparable
     # to the hidden-state chunk instead of the full B*T*V logits tensor.
-    inc_factor = triton.cdiv(V, H)
-    chunk_size = triton.next_power_of_2(triton.cdiv(BT, inc_factor))
+    #
+    # Chunking trades peak memory for HBM traffic: every chunk re-reads the full
+    # (V, H) weight for the logits and dX matmuls and re-reads/writes the full
+    # (V, H) dW accumulator, so latency scales with the chunk count. Callers that
+    # can afford a larger logits chunk should pass chunk_size explicitly.
+    if chunk_size is None:
+        # Size the chunk against a logits-memory budget rather than V/H. The old
+        # V/H rule gave 128-row chunks at V=128k/H=4k, so the weight was re-read
+        # 32 times per pass for no memory saving once dW dominates the footprint.
+        budget_rows = max(1, LOGITS_CHUNK_BUDGET_BYTES // (V * _input.element_size()))
+        chunk_size = 1 << (budget_rows.bit_length() - 1)
+    chunk_size = max(1, min(int(chunk_size), BT))
     num_chunks = triton.cdiv(BT, chunk_size)
 
     for chunk_id in range(num_chunks):
@@ -211,7 +227,17 @@ def fused_linear_cross_entropy_forward(
         if input_requires_grad:
             grad_input[start_idx:end_idx] = grad_logits_chunk @ weight
         if grad_weight is not None and input_requires_grad:
-            grad_weight += torch.mm(grad_logits_chunk.t(), input_chunk).float()
+            # Accumulate in place: materializing mm(...) and then casting it would
+            # allocate two (V, H) temporaries per chunk, which dominates peak
+            # memory and does not shrink as chunk_size shrinks.
+            grad_logits_t = grad_logits_chunk.t()
+            if grad_weight.dtype == grad_logits_chunk.dtype:
+                grad_weight.addmm_(grad_logits_t, input_chunk)
+            else:
+                grad_weight.addmm_(
+                    grad_logits_t.to(grad_weight.dtype),
+                    input_chunk.to(grad_weight.dtype),
+                )
         if grad_bias is not None and input_requires_grad:
             torch.add(
                 input=grad_bias,

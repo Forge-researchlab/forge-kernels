@@ -29,7 +29,10 @@ sys.path.insert(0, _HERE)
 
 import torch
 import torch.distributed as dist
-from torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy
+try:
+    from torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy
+except ImportError:  # torch < 2.6 keeps FSDP2 under the private namespace
+    from torch.distributed._composable.fsdp import fully_shard, MixedPrecisionPolicy
 
 import forge
 from pirate_dataset import TRAIN_PAIRS, build_full_example
@@ -40,7 +43,8 @@ from pirate_dataset import TRAIN_PAIRS, build_full_example
 # -----------------------------------------------------------------------------
 
 MODEL_ID = "Qwen/Qwen2.5-0.5B"
-ARTIFACTS_DIR = Path("/workspace/kernel-POCs/artifacts/lora_demo_qwen")
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ARTIFACTS_DIR = REPO_ROOT / "artifacts" / "lora_demo_qwen"
 LOG_PATH = ARTIFACTS_DIR / "train_log.jsonl"
 RUN_META_PATH = ARTIFACTS_DIR / "run_meta.json"
 ADAPTER_DIR = ARTIFACTS_DIR / "lora_adapter"
@@ -238,6 +242,11 @@ def main():
             if hasattr(p, "full_tensor"):
                 _ = p.full_tensor()
 
+    # Every rank must enter this collective; calling it under an is_rank0 guard
+    # hangs rank 0 until the NCCL watchdog aborts the job.
+    final_peaks = [None] * world
+    dist.all_gather_object(final_peaks, torch.cuda.max_memory_allocated() / 1e9)
+
     if is_rank0:
         torch.save(gathered, ADAPTER_DIR / "lora_weights.pt")
         from peft import LoraConfig
@@ -248,9 +257,6 @@ def main():
             lora_dropout=0.0, bias="none", task_type="CAUSAL_LM",
         )
         cfg.save_pretrained(str(ADAPTER_DIR))
-
-        final_peaks = [None] * world
-        dist.all_gather_object(final_peaks, torch.cuda.max_memory_allocated() / 1e9)
 
         meta = {
             "model": MODEL_ID,

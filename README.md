@@ -6,7 +6,12 @@ Built during the [Forge Hackathon](https://xhitijc2.github.io/forge-hackathon-pl
 
 ## Results
 
-All numbers below are read from committed result files, not estimates. Every run is on a **NVIDIA A100-SXM4-80GB**, torch `2.4.1+cu124`, Triton `3.0.0`, `liger-kernel==0.8.0`, dated 2026-05-23/24.
+All numbers below are read from committed result files, not estimates. Every run is on a **NVIDIA A100-SXM4-80GB**, Triton `3.0.0`, `liger-kernel==0.8.0`. The RoPE/RMSNorm/SwiGLU/GeGLU/LoRA/LayerNorm rows are from 2026-05-23/24 on torch `2.4.1+cu124`; the Cross-Entropy and Embedding rows are from 2026-08-14 on torch `2.4.1+cu121`.
+
+Every benchmark was re-run from scratch on a second A100-80GB box on 2026-08-14 and
+the original figures hold: RoPE **7.12×** vs eager (2.77× vs Unsloth fused-QK, 3.24×
+vs Liger) with forward 30/30, backward 8/8 and fp64 gradcheck passing, and RMSNorm
+**10.24×** forward. `bench_all.py` now completes 11/11.
 
 
 | Kernel                     | Best recorded speedup | Baseline               | Shape / config                      | Source                                                                               |
@@ -22,8 +27,11 @@ All numbers below are read from committed result files, not estimates. Every run
 | **LoRA QKV** (v4)          | **1.37×** fwd+bwd     | Unsloth                | 4×2048, h=4096, GQA 32/8, r=8, bf16 | [`CHANGELOG.md`](kernels/lora_qkv/CHANGELOG.md)                                      |
 | **LoRA MLP** (v6)          | **1.18×** fwd         | Unsloth                | 4×2048, h=4096, i=14336, r=16, bf16 | [`v6_upgrade_1_latency_*.csv`](kernels/lora_mlp/benchmarks/results/)                 |
 | **LayerNorm**              | **1.57×** fwd+bwd     | PyTorch eager          | 8×2048×4096, fp32                   | [`layernorm_tests.executed.ipynb`](kernels/layernorm/layernorm_tests.executed.ipynb) |
-| **Cross-Entropy**          | not yet measured      | —                      | harness ready, no run committed     | [`benchmarks.md`](kernels/cross_entropy/docs/benchmarks.md)                          |
-| **Embedding**              | not yet measured      | —                      | harness ready, no run committed     | [`bench_embedding.py`](kernels/embedding/benchmarks/bench_embedding.py)              |
+| **Cross-Entropy**          | **2.77×** fwd+bwd     | PyTorch eager          | 8192×128256, fp32                   | [`cross_entropy_*.csv`](kernels/cross_entropy/benchmarks/results/)                   |
+|                            | 1.00× fwd+bwd         | Liger                  | same                                | same                                                                                 |
+| **Fused Linear CE**        | **2.88× less memory** | PyTorch eager          | BT=8192, h=4096, v=128256, bf16     | [`fused_linear_cross_entropy_*.csv`](kernels/cross_entropy/benchmarks/results/)      |
+|                            | 2.85× fwd+bwd         | Liger                  | same                                | same                                                                                 |
+| **Embedding**              | **1.49×** fwd+bwd     | PyTorch eager          | v=32000, d=4096, s=8192, bf16       | [`bench_*.csv`](kernels/embedding/benchmarks/results/)                               |
 
 
 ### Where these kernels lose
@@ -36,6 +44,42 @@ Headline numbers are best-case. The same result files record regressions, and th
 - **GeGLU gate+up fusion narrows as the batch grows.** It reaches 2.84× only at a 14-token batch (2×7×4096); at the realistic 2×2048×4096 training shape it is 1.07× vs PyTorch and 0.97× vs Liger — slightly slower than Liger. It does hold a real memory edge there: 854 MiB vs PyTorch's 1112 MiB.
 - **LayerNorm is 0.84× vs eager** at 4×2048×4096 bf16.
 - **LoRA MLP memory matches Unsloth rather than beating it** — 737 MB vs 736 MB peak forward. The v6 in-place epilogue closed a 1185 MB → 737 MB gap against our own earlier version; it is not a win over the baseline.
+- **Embedding loses to PyTorch on 94 of 108 benchmarked configs**, down to 0.31× at v=32000/d=768/s=512. Sorting indices to group duplicate rows only pays for itself at large embedding dimension and long sequences: every win is at `d=4096, s=8192`. The vendored Liger-style reference cannot be compared at all in bf16 — `tl.atomic_add` rejects bf16 on Triton 3.0, whereas the sort-and-group backward accumulates in fp32 and is also deterministic.
+- **Fused linear CE only saves memory once the logits dominate.** At BT=1024–2048 it is level with eager (1269 vs 1260 MB, 1536 vs 1520 MB) because the `(V, H)` weight gradient, not the logits chunk, sets the floor. The 2.88× saving appears at BT=8192 (2085 vs 6012 MB).
+- **Plain CE's memory ratio is an artifact worth stating plainly.** It transforms the logits tensor in place, so it allocates ~0.1 MB against eager's 12 GB of intermediates at BT=8192. That is a real advantage but it is "no additional allocation", not "12000× less memory than a correct implementation needs".
+
+### Fused linear cross-entropy: what the first measurement found
+
+The first time this harness was ever run it showed the fused kernel losing on both
+axes it exists to win — 5× slower than eager *and* using more memory than eager.
+Two causes, both in the chunk loop:
+
+1. `grad_weight += torch.mm(dlogits.t(), input_chunk).float()` allocated two
+   `(V, H)` temporaries per chunk. At `V=128256, H=4096` that is ~3 GB of transient
+   allocation per chunk, and it does not shrink when `chunk_size` shrinks — so
+   chunking bought no memory saving at all. Replaced with `grad_weight.addmm_(...)`.
+2. `chunk_size` was derived as `BT / (V/H)`, giving 128-row chunks at these shapes.
+   The `(V, H)` weight is re-read from HBM once per chunk for the logits matmul,
+   again for `dX`, and read-modify-written again for `dW`, so latency scaled with
+   the chunk count for no benefit. Now sized against a logits-memory budget.
+
+Measured before and after on the same A100, bf16, `h=4096, v=128256`, full fwd+bwd:
+
+| BT   | latency before | after    | vs eager | peak before | after       | eager   |
+| ---- | -------------- | -------- | -------- | ----------- | ----------- | ------- |
+| 1024 | 262.1 ms       | 15.2 ms  | 0.96×    | 4024 MB     | 1269 MB     | 1260 MB |
+| 2048 | 269.9 ms       | 28.8 ms  | 1.00×    | 4040 MB     | 1536 MB     | 1520 MB |
+| 4096 | 290.9 ms       | 56.9 ms  | 1.02×    | 4071 MB     | **2053 MB** | 3006 MB |
+| 8192 | 321.7 ms       | 113.1 ms | 1.02×    | 4135 MB     | **2085 MB** | 6012 MB |
+
+"Before" is [`fused_linear_cross_entropy_20260814_025924.csv`](kernels/cross_entropy/benchmarks/results/fused_linear_cross_entropy_20260814_025924.csv),
+kept as the pre-fix baseline; "after" is the newest CSV in the same directory.
+
+So the kernel now runs at eager latency parity while using 2.88× less memory at
+BT=8192, where before it was 2.7× slower than eager and used less memory only
+because eager's logits had grown past it. Liger 0.8.0 uses the same `V/H` chunk
+rule and is unchanged, which is why it is now 2.8–17× slower here; that is a
+comparison against Liger's default configuration, not a claim about its ceiling.
 
 ### Correctness
 
@@ -48,7 +92,8 @@ Headline numbers are best-case. The same result files record regressions, and th
 | SwiGLU        | 75 pass                                                                    | not run                              |
 | LoRA QKV v4   | 18 tests pass                                                              | PASS (MHA, GQA, r=4/8/16)            |
 | RMSNorm v4    | results committed under [`tests/results/`](kernels/rmsnorm/tests/results/) | —                                    |
-| Cross-Entropy | 25 tests defined, no run committed                                         | uses `assert_close`, not `gradcheck` |
+| Cross-Entropy | 105 pass, 0 fail (incl. fused linear CE)                                   | uses `assert_close`, not `gradcheck` |
+| Embedding     | 15 pass, 0 fail (fp32 + bf16, padding_idx, duplicate rows)                 | uses `assert_close`, not `gradcheck` |
 | GeGLU         | no run committed                                                           | explicitly deferred                  |
 
 
@@ -75,7 +120,22 @@ Tests:
 ```bash
 pytest tests/                             # SwiGLU, GeGLU, RMSNorm, LayerNorm
 pytest kernels/lora_mlp/tests/ kernels/lora_qkv/tests/ kernels/cross_entropy/tests/
+pytest kernels/embedding/tests/           # must be its own process, see Known gaps
 ```
+
+The `forge` integration checks need the package plus a real model, and the FSDP2
+ones need two GPUs:
+
+```bash
+PYTHONPATH=forge:. python forge/tests/verify_lora_qwen_patch.py
+PYTHONPATH=forge:. torchrun --nproc-per-node=2 --standalone forge/tests/verify_fsdp2_lora_qwen.py
+PYTHONPATH=forge:. torchrun --nproc-per-node=2 --standalone forge/demos/train_lora_qwen_forge.py
+PYTHONPATH=forge:. python forge/demos/plot_artifacts_qwen.py
+PYTHONPATH=forge:. python forge/demos/run_inference_qwen.py
+```
+
+These need `transformers`, `peft`, and `matplotlib`, which are not in the root
+`pyproject.toml` — install them alongside the pinned kernel deps.
 
 ## Layout
 
@@ -98,12 +158,27 @@ results/                  # top-level SwiGLU CSVs
 
 The `forge` package is the integration story: `forge.patch(model)` swaps kernels into a live Hugging Face model, with architecture detection for `qwen2`, `qwen3`, `gemma`, and `gemma2`, and an idempotent `unpatch`. See [`forge/forge/patching/core.py`](forge/forge/patching/core.py).
 
+### Verified in a live model
+
+Re-run 2026-08-14 on 2× A100-80GB, torch `2.4.1+cu121`, real `Qwen/Qwen2.5-0.5B` weights:
+
+| Check | Result |
+| ----- | ------ |
+| `forge.patch` on Qwen2.5-0.5B | 24 LoRA-QKV + 24 LoRA-MLP + 1 fused-linear-CE replaced; loss delta 9.5e-07, min cosine 0.9994; `unpatch` restores |
+| FSDP2 on 2 GPUs | forward bit-identical; grad cosine 0.99995; 5-step loss matches the single-GPU reference to 9.2e-05 relative |
+| 200-step LoRA fine-tune under FSDP2 | loss 4.3686 → 0.0005, ~1.03 s/step, 1.75 GB peak per rank, 8.1M of 638M params trainable (1.27%) |
+| Held-out generation | base "Good morning everyone!" → "Good morning, everyone!"; tuned → "Ahoy, ye good and true matey!" |
+
+Artifacts land in [`artifacts/lora_demo_qwen/`](artifacts/lora_demo_qwen/) and
+[`artifacts/fsdp2_analysis/`](artifacts/fsdp2_analysis/).
+
 ## Known gaps
 
 Kept here so the repo does not overstate itself:
 
-- **Cross-Entropy and Embedding have no committed benchmark results.** Both harnesses are written and wired into `bench_all.py`, but `benchmarks/results/` for each contains only `.gitkeep`. No memory reduction has been measured for fused linear + cross-entropy at any vocabulary size.
-- `requirements.txt` is empty — dependencies live in [`pyproject.toml`](pyproject.toml) and `uv.lock`.
+- `requirements.txt` is empty — dependencies live in [`pyproject.toml`](pyproject.toml) and `uv.lock`. `transformers`, `peft`, and `matplotlib` are needed by `forge/demos/` and `forge/tests/` but are declared only in [`forge/pyproject.toml`](forge/pyproject.toml).
+- **`kernels/embedding/tests/` must run in its own pytest process.** It and `kernels/cross_entropy/tests/` both put an `experiments/` package on `sys.path`; cross-entropy has `experiments/v1/__init__.py`, so collecting both together resolves `experiments.v1` to the wrong kernel and the embedding import fails.
+- **Benchmark latencies on a shared box are not trustworthy.** A pass taken while another tenant held the GPU reported every provider, PyTorch baseline included, at roughly half speed. Peak-memory figures are unaffected. Check `nvidia-smi` before believing a latency number.
 - `tests/test_cross_entropy.py`, `test_lora_mlp.py`, `test_lora_qkv.py`, and `test_rope.py` at the top level are empty placeholders. The real suites are under `kernels/<name>/tests/`.
 - GeGLU fp64 gradcheck is deferred.
 - `ForgeRMSNorm` does not accept Gemma's `offset` parameter, so `forge.patch` skips RMSNorm on Gemma models.
