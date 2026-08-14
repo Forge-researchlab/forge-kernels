@@ -31,6 +31,23 @@ So if your change touches performance:
    [Where these kernels lose](README.md#where-these-kernels-lose) section and it
    is load-bearing — reviewers trust the wins because the losses are listed.
 
+## Branches and how work lands
+
+```
+your fork / feature branch  ──PR──▶  dev  ──PR──▶  main
+```
+
+- **`dev`** is the integration branch. Open your pull request against `dev`, not
+  `main`. GitHub will offer `main` as the default base, so change it.
+- **`main`** is release-only. Every commit on it should be a state we would tag.
+- **`hackathon-archive`** is the frozen pre-cleanup tree from the May 2026
+  hackathon, including the working notes that used to live in `context/`. Nothing
+  is merged out of it; it exists so that history is not lost.
+
+Both `main` and `dev` are protected: no direct pushes, no force pushes, no
+deletion, CI must pass, and a maintainer review is required. So the only route in
+is a pull request, including for the maintainer.
+
 ## Environment
 
 Python 3.11–3.12, CUDA 12.1+, and a CUDA GPU. The kernel dependencies are

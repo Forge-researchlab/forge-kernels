@@ -211,6 +211,48 @@ Re-run 2026-08-14 on 2× A100-80GB, torch `2.4.1+cu121`, real `Qwen/Qwen2.5-0.5B
 Artifacts land in [`artifacts/lora_demo_qwen/`](artifacts/lora_demo_qwen/) and
 [`artifacts/fsdp2_analysis/`](artifacts/fsdp2_analysis/).
 
+### This is a training library, and "multi-GPU" means compatible, not accelerated
+
+Two claims are easy to overstate, so both are pinned down here.
+
+**Training, not inference.** Measured 2026-08-14 on an idle A100-80GB with real
+Qwen2.5-0.5B weights (`hidden=896`, `intermediate=4864`), bf16, a 449-token
+prompt, patching one kernel at a time:
+
+| Patched | Prefill | vs eager | Modules replaced |
+| ------------------ | ------: | -------: | ---------------- |
+| nothing            | 31.81 ms | 1.00× | — |
+| `embedding`        | 31.86 ms | 1.00× | 1 |
+| `rope`             | 32.84 ms | 0.97× | module-level |
+| `fused_linear_ce`  | 32.06 ms | 0.99× | 1 |
+| `rmsnorm`          | 34.80 ms | 0.91× | 49 |
+| `swiglu`           | 35.20 ms | 0.90× | 24 |
+| **everything**     | **37.44 ms** | **0.85×** | 75 |
+
+`forge.patch` is *correct* at inference — greedy generation is token-identical to
+eager, and logits agree to 1.8e-02 relative in bf16 — but it is **15% slower**,
+at prefill and during generation alike. The cause is shape, not a bug: RMSNorm's
+10× and SwiGLU's 6.5× are recorded at `hidden=4096, intermediate=11008` with
+8192 rows, and a 0.5B model at batch 1 is far below the size where the fused
+kernels amortise their launch and autotune overhead. This is the same effect as
+the small-shape regressions listed under
+[Where these kernels lose](#where-these-kernels-lose). Two of the kernels —
+fused linear cross-entropy and both LoRA kernels — have no inference role at all,
+since there is no loss and no adapter gradient to compute.
+
+So: use it for fine-tuning. Do not enable it for serving until a shape-based
+dispatch exists.
+
+**"Multi-GPU" means the kernels survive FSDP2, not that they speed it up.** What
+was verified is that patched forwards keep working when weights become sharded
+DTensors — which is a real and non-trivial property, since a kernel that closes
+over a raw `weight` tensor at patch time crashes under FSDP2, and an earlier
+version of the LoRA MLP path did exactly that (see
+[`docs/phase3_fsdp2_design.md`](docs/phase3_fsdp2_design.md) §7). There is no
+custom collective, no communication/computation overlap, and no change to how
+FSDP2 shards or all-gathers. The 2-GPU numbers above show *equivalence* to the
+single-GPU reference, not a speedup from scaling.
+
 ## Known gaps
 
 Kept here so the repo does not overstate itself:
