@@ -17,8 +17,8 @@ been executed. When they were finally run, the fused linear cross-entropy kernel
 turned out to be 5× *slower* than PyTorch eager while using *more* memory — the
 exact opposite of the kernel's purpose — because of a per-chunk temporary that no
 one had measured. See the [fused linear cross-entropy
-section](README.md#fused-linear-cross-entropy-what-the-first-measurement-found)
-in the README.
+section](docs/benchmarks.md#fused-linear-cross-entropy-what-the-first-measurement-found)
+in the benchmarks doc.
 
 So if your change touches performance:
 
@@ -27,9 +27,9 @@ So if your change touches performance:
 2. Quote the shape, dtype, and baseline with every number. "1.4× faster" means
    nothing without them; the same kernel here ranges from 0.31× to 1.49×
    depending only on shape.
-3. Report the regressions too. The README has a
-   [Where these kernels lose](README.md#where-these-kernels-lose) section and it
-   is load-bearing — reviewers trust the wins because the losses are listed.
+3. Report the regressions too. The benchmarks doc has a
+   [Where these kernels lose](docs/benchmarks.md#where-these-kernels-lose) section
+   and it is load-bearing — reviewers trust the wins because the losses are listed.
 
 ## Branches and how work lands
 
