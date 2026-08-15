@@ -165,16 +165,3 @@ Full list: [`docs/benchmarks/known_gaps.md`](docs/benchmarks/known_gaps.md).
 Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). Benchmark results
 from GPUs other than an A100-80GB are the most useful addition right now, since
 every number here comes from one card. Licensed under [Apache-2.0](LICENSE).
-
-## Contributors
-
-- **Devansh Agarwal**: SwiGLU, RMSNorm, LoRA MLP
-- **Sasank Tumpati**: fused linear cross-entropy, Qwen patch adapters
-- **Shaurya Madukuri**: Embedding, Cross-Entropy, Qwen2.5-0.5B LoRA demo, FSDP2 analysis artifacts
-- **Xhitij C**: LoRA QKV, GeGLU
-- **Gautam**
-- **Srinivasan**
-- **Jithamanyu**: benchmark harness
-
-Some commits were authored from a shared GPU box, so `git log` does not reflect
-ownership. The list above is authoritative.
