@@ -1,10 +1,10 @@
 """Generate the 4 shareable artifacts from the training JSONL log.
 
 Reads:
-    artifacts/lora_demo/train_log.jsonl    (one JSON entry per training step)
-    artifacts/lora_demo/run_meta.json      (final run metadata)
+    artifacts/lora_demos/gemma/train_log.jsonl    (one JSON entry per training step)
+    artifacts/lora_demos/gemma/run_meta.json      (final run metadata)
 
-Produces (all under artifacts/lora_demo/):
+Produces (all under artifacts/lora_demos/gemma/):
     loss_curve.png     — training loss vs step + 20-step moving average
     vram.png           — peak VRAM per rank over steps + peak bar chart
     step_time.png      — per-step wall time + cumulative + average
@@ -23,7 +23,7 @@ import numpy as np
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ARTIFACTS_DIR = REPO_ROOT / "artifacts" / "lora_demo"
+ARTIFACTS_DIR = REPO_ROOT / "artifacts" / "lora_demos" / "gemma"
 LOG_PATH = ARTIFACTS_DIR / "train_log.jsonl"
 META_PATH = ARTIFACTS_DIR / "run_meta.json"
 

@@ -2,8 +2,8 @@
 
 Vendored, self-contained implementations of competitor RoPE kernels. Used by `benchmarks/bench_rope.py` and `tests/test_rope.py` to validate `ForgeRoPE` against:
 
-1. **Liger-Kernel** — single-launch fused Q+K. BSD-2-Clause.
-2. **Unsloth** — two entry points: default (separate Q and K launches) and fused-QK (single launch, originally TRL-specific).
+1. **Liger-Kernel**, single-launch fused Q+K. BSD-2-Clause.
+2. **Unsloth**, two entry points: default (separate Q and K launches) and fused-QK (single launch, originally TRL-specific).
 
 Both vendored on **2026-05-23** from upstream `main`. Original sources also live in `../rope_knowledge_base/` for reference reading.
 

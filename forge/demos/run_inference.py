@@ -5,7 +5,7 @@ Loads the base Gemma 2-2B on a single GPU. For each held-out English prompt:
   * Generate from BASE + trained LoRA adapter (apply forge.patch for parity
     with training; this isn't strictly needed for correctness but mirrors the
     inference path the team would deploy).
-Writes results to artifacts/lora_demo/inference_samples.md.
+Writes results to artifacts/lora_demos/gemma/inference_samples.md.
 
 Run after training completes:
     HF_HOME=/workspace/.hf-cache python forge/demos/run_inference.py
@@ -29,7 +29,7 @@ from pirate_dataset import HELD_OUT_PROMPTS, build_prompt
 
 MODEL_ID = "google/gemma-2-2b"
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ARTIFACTS_DIR = REPO_ROOT / "artifacts" / "lora_demo"
+ARTIFACTS_DIR = REPO_ROOT / "artifacts" / "lora_demos" / "gemma"
 ADAPTER_DIR = ARTIFACTS_DIR / "lora_adapter"
 OUT_PATH = ARTIFACTS_DIR / "inference_samples.md"
 

@@ -398,7 +398,7 @@ def main():
 
             out_dir = os.path.join(
                 os.path.dirname(os.path.dirname(_HERE)),
-                "artifacts", "fsdp2_analysis",
+                "artifacts", "fsdp2",
             )
             os.makedirs(out_dir, exist_ok=True)
             jsonl_path = os.path.join(out_dir, "qwen_fsdp2_metrics.jsonl")

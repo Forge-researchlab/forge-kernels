@@ -1,6 +1,6 @@
 # Embedding Kernel
 
-Research project to build a high-performance Triton replacement for `torch.nn.Embedding` — targeting both forward (gather) and backward (gradient scatter-add) passes.
+Research project to build a high-performance Triton replacement for `torch.nn.Embedding`, targeting both forward (gather) and backward (gradient scatter-add) passes.
 
 ## The Problem
 

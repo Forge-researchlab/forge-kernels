@@ -6,7 +6,7 @@ Format: each version entry records the algorithmic approach, key results, and wh
 
 ---
 
-## [v4] — 2026-05-24
+## [v4], 2026-05-24
 
 ### Approach
 Packed backward pass: reduces from 18+ cuBLAS calls (v3/Unsloth) to 9 cuBLAS + 1 Triton = 10 ops. Packs compatible matrix operations (dX_base, XA_all, dA_all) into single cuBLAS calls. A Triton epilogue fuses the 3 LoRA dX contributions ([M,r]@[r,K]) into one pass.
@@ -48,7 +48,7 @@ Forward + Backward:
 
 ---
 
-## [v3] — 2026-05-24
+## [v3], 2026-05-24
 
 ### Approach
 Training-compatible wrapper: `torch.autograd.Function` with fused forward (v2_3) and custom backward using cuBLAS `addmm_` chain. Falls back to plain PyTorch for fp64 (gradcheck compatibility).
@@ -81,13 +81,13 @@ Forward + Backward:
 | 64   | 5.054ms | 4.722ms | **1.07x** |
 
 ### Limitations
-- Backward uses separate cuBLAS calls (same as Unsloth) — not fused
+- Backward uses separate cuBLAS calls (same as Unsloth), not fused
 - Saving X for backward increases memory (standard tradeoff)
 - Forward fallback to PyTorch for fp64 adds overhead for gradcheck only
 
 ---
 
-## [v2_3] — 2026-05-24
+## [v2_3], 2026-05-24
 
 ### Approach
 Fully packed QKV: ALL 6 weight matrices packed into one tall matrix for a single cuBLAS call. X is read from HBM only ONCE. Single fused Triton epilogue applies LoRA to all 3 projections in-place.
@@ -108,7 +108,7 @@ Fully packed QKV: ALL 6 weight matrices packed into one tall matrix for a single
 | 64   | 2.039ms | **1.792ms** | **1.14x** | 97 MB |
 
 ### Key Finding
-**v2_3 is the new best forward kernel.** The single cuBLAS call eliminates 2 redundant X reads (saves ~128 MB bandwidth at LLaMA-8B scale). The wide output [M, 6192] does NOT trigger cuBLAS algorithm-selection penalties — confirmed experimentally. Memory matches Unsloth (~97 vs 96 MB).
+**v2_3 is the new best forward kernel.** The single cuBLAS call eliminates 2 redundant X reads (saves ~128 MB bandwidth at LLaMA-8B scale). The wide output [M, 6192] does NOT trigger cuBLAS algorithm-selection penalties, confirmed experimentally. Memory matches Unsloth (~97 vs 96 MB).
 
 ### Limitations
 - Outputs are non-contiguous views (downstream may need .contiguous())
@@ -116,7 +116,7 @@ Fully packed QKV: ALL 6 weight matrices packed into one tall matrix for a single
 
 ---
 
-## [v2_2] — 2026-05-24
+## [v2_2], 2026-05-24
 
 ### Approach
 In-place epilogue + fused 3-in-1 epilogue kernel. Two improvements over v2: (1) Triton epilogue writes in-place into packed output's first N columns, (2) single kernel launch for all 3 QKV epilogues.
@@ -147,7 +147,7 @@ Memory fixed to match Unsloth. Speed is slightly slower than v2 due to fused epi
 
 ## [Unreleased]
 
-### 2026-05-24 — Project Scaffolding & Baseline Research
+### 2026-05-24, Project Scaffolding & Baseline Research
 
 #### Project Structure Created
 - Full folder structure with `experiments/v1-v3`, `benchmarks`, `docs`, `reference`, `tests`
@@ -166,7 +166,7 @@ Key findings:
 - **9 kernel launches** total for QKV forward (3 projections × 3 calls)
 - **X read from HBM 6 times** (Q W, Q A, K W, K A, V W, V A)
 - `X@A` intermediates (shape `[B*S, r]`, tiny) materialized to HBM unnecessarily 3 times
-- No cross-projection fusion — each cuBLAS call tiles independently
+- No cross-projection fusion, each cuBLAS call tiles independently
 - Supports bitsandbytes 4-bit and FP8 quantized base weights
 - Handles GQA via different-sized W_k/W_v matrices
 
@@ -179,7 +179,7 @@ Key findings:
 
 - Liger does **NOT** handle QKV projection fusion or LoRA computation
 - Liger focuses on RoPE, cross-entropy, and activation kernels
-- The QKV + LoRA fusion is a greenfield opportunity — no existing Triton kernel exists
+- The QKV + LoRA fusion is a greenfield opportunity, no existing Triton kernel exists
 
 #### Improvement Axes Defined
 
@@ -193,22 +193,22 @@ Key findings:
 #### Reference Implementation Created
 
 - `reference/lora_qkv_pytorch.py`: clean PyTorch reference with 3 levels:
-  1. `matmul_lora()` — single projection with LoRA (for per-projection testing)
-  2. `lora_qkv_forward()` — all Q/K/V projections (for full-QKV testing)
-  3. `LoRAQKV` — autograd.Function with forward + backward
+  1. `matmul_lora()`, single projection with LoRA (for per-projection testing)
+  2. `lora_qkv_forward()`, all Q/K/V projections (for full-QKV testing)
+  3. `LoRAQKV`, autograd.Function with forward + backward
 - Backward pass verified against `torch.autograd.gradcheck` in fp64
 - Handles GQA (different K/V output dimensions)
 - No external dependencies (no bitsandbytes, no Triton)
 
 #### Docs Updated
 
-- `docs/research.md` — comprehensive baseline research with Unsloth/Liger analysis, improvement axes, GQA considerations
-- `docs/benchmarks.md` — methodology, baselines, sweep configurations, result templates
-- `docs/artifacts/ANALYSIS.md` — deep-dive comparison of Unsloth and Liger approaches
+- `docs/research.md`, comprehensive baseline research with Unsloth/Liger analysis, improvement axes, GQA considerations
+- `docs/benchmarks.md`, methodology, baselines, sweep configurations, result templates
+- `docs/artifacts/ANALYSIS.md`, deep-dive comparison of Unsloth and Liger approaches
 
 ---
 
-## [v1] — 2026-05-24
+## [v1], 2026-05-24
 
 ### Approach
 Per-projection fused LoRA matmul: `Y = X @ W^T + s * (X @ A^T) @ B^T` in a single Triton kernel.
@@ -256,7 +256,7 @@ Same pattern as lora_mlp v1: Triton tiled matmul is ~0.58-0.69x cuBLAS. Need cuB
 
 ---
 
-## [v2] — 2026-05-24
+## [v2], 2026-05-24
 
 ### Approach
 Packed W+A cuBLAS matmul + Triton LoRA epilogue. Instead of Unsloth's 3 calls per projection (X@W, X@A, addmm\_), v2 concatenates W and A into a single matrix, does one cuBLAS call that reads X once, then a cheap Triton epilogue adds the LoRA term.
@@ -300,7 +300,7 @@ Per-projection K/V GQA (M=8192, N=1024, K=4096):
 ---
 
 <!--
-## [v1] — YYYY-MM-DD
+## [v1], YYYY-MM-DD
 
 ### Approach
 Per-projection fused LoRA matmul: `Y = X @ W^T + s * (X @ A^T) @ B^T` in one Triton kernel.
@@ -317,7 +317,7 @@ Applied independently to each of Q, K, V. 3 kernel launches total.
 
 ---
 
-## [v2] — YYYY-MM-DD
+## [v2], YYYY-MM-DD
 
 ### Approach
 Q+K+V projection fusion: load X once from HBM, compute all three projections with LoRA.
@@ -334,7 +334,7 @@ Handle GQA (asymmetric Q vs K/V output dimensions).
 
 ---
 
-## [v3] — YYYY-MM-DD
+## [v3], YYYY-MM-DD
 
 ### Approach
 Full QKV forward wrapped in torch.autograd.Function with custom backward.

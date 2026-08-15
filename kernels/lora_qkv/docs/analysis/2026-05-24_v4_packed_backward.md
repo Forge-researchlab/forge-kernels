@@ -33,8 +33,8 @@
   - `dA`: All 3 use the same X [M, K] → pack dY_B column-wise
 
 - **Cannot pack:** Operations where output dimensions differ.
-  - `dY @ B`: dQ is [M, H_q], dK/dV are [M, H_kv] — different source widths
-  - `dB`: Results are [H_q, r] vs [H_kv, r] — different output heights
+  - `dY @ B`: dQ is [M, H_q], dK/dV are [M, H_kv], different source widths
+  - `dB`: Results are [H_q, r] vs [H_kv, r], different output heights
 
 ### Triton epilogue design
 
@@ -42,7 +42,7 @@ The backward epilogue is structurally different from the forward epilogue:
 - **Forward:** Reads base_out + XA, computes 1× `XA @ B^T`, adds
 - **Backward:** Reads dX_base + 3× (dY_B, A), computes 3× `dY_B @ A`, adds all
 
-Each `dY_B @ A` is [BLOCK_M, R] @ [R, BLOCK_K] — same tiny matmul pattern, just 3 of them in one kernel. This avoids 3 separate dX reads + 3 writes (saves 6× [M, K] HBM transfers).
+Each `dY_B @ A` is [BLOCK_M, R] @ [R, BLOCK_K], same tiny matmul pattern, just 3 of them in one kernel. This avoids 3 separate dX reads + 3 writes (saves 6× [M, K] HBM transfers).
 
 ## What changed
 

@@ -17,7 +17,7 @@
 ## Hypothesis (going in)
 
 Packing 4 cuBLAS calls into 1 should:
-1. Read `X` once instead of 4× — save ~3× M*H*sizeof(bf16) = ~192 MiB of HBM traffic.
+1. Read `X` once instead of 4×, save ~3× M*H*sizeof(bf16) = ~192 MiB of HBM traffic.
 2. Cut kernel launches from 4 → 1, saving ~50–100 µs.
 3. Give cuBLAS a single larger N to pick a more efficient tile.
 
@@ -85,7 +85,7 @@ v5 (1 mega,    N=28672):       7.461 ms  @ 257.9 TFLOPS
                             only 0.09 ms diff (1.2%)
 ```
 
-Packing **two big GEMMs** into a single N=28672 mega-GEMM is essentially free —
+Packing **two big GEMMs** into a single N=28672 mega-GEMM is essentially free.
 cuBLAS already hits ~82% of bf16 peak at N=14336, and a 2× wider N doesn't help
 because the kernel is fundamentally compute-bound on these shapes.
 
@@ -103,7 +103,7 @@ cuBLAS launches as a separate skinny kernel. The skinny kernel itself isn't
 free (cuBLAS picks a GEMV-style algo, low SM utilization), and 4 launches
 back-to-back fight for the L2 with the bigger calls. Folding those 16 columns
 onto the end of the mega-GEMM (going from N=28672 → N=28704) costs essentially
-nothing — the mega-GEMM stays at the same TFLOPS — so the per-call overhead of
+nothing, the mega-GEMM stays at the same TFLOPS, so the per-call overhead of
 the skinny launches disappears.
 
 ### 2. Down: packing hurts
@@ -142,7 +142,7 @@ overheads that don't appear in the matmul-only microbench:
   from non-contiguous reads costs ~100–200 µs.
 - **Saving `e_full`, `g_full` for backward** in training mode: v5 does this
   via two extra `torch.empty(M, I)` writes inside the epilogue (~115 MiB each).
-  v3 does the same, so this isn't a v5-specific cost — included for completeness.
+  v3 does the same, so this isn't a v5-specific cost, included for completeness.
 - **`.contiguous()` copy in down phase**: ~150 µs (already counted in the
   end-to-end down number above).
 - **Mega-matmul intermediate is larger**: v5's [M, 28704] gate+up output is
@@ -163,7 +163,7 @@ algo selection story: N=4096 gets a great tile (82% peak), N=4112 gets a worse
 one (76% peak), and N=28672 vs N=28704 are nearly identical. The N=4112 hit
 is the bigger of the two cuBLAS-tile-selection penalties.
 
-## Phase 5: cublasLt explicit algo — skipped
+## Phase 5: cublasLt explicit algo, skipped
 
 Per the prior worker's notes the v4 `cublaslt_wrapper.py` has broken algo enum
 IDs. Even if we fixed it, the upside is at most:
@@ -187,7 +187,7 @@ The data is unambiguous:
    Triton epilogue's non-contiguous reads claw most of it back. If we want to
    keep packing here, the next step is to **make the epilogue write directly
    into a layout that matches the mega-output** so the strided reads aren't
-   wasted — i.e., write the SwiGLU output `h` with the same stride pattern as
+   wasted, i.e., write the SwiGLU output `h` with the same stride pattern as
    the mega-matmul, avoiding any restride. Or simpler: allocate `e_base` and
    `g_base` as **separate contiguous buffers** and call cuBLAS twice (giving up
    the LoRA-A absorption trick but keeping clean strides for the epilogue).
@@ -198,11 +198,11 @@ The data is unambiguous:
 
 ### Possible follow-ups worth measuring (not done here)
 
-- **Variant A — gate+up split, down split (revert v5 training to v3 layout):**
+- **Variant A, gate+up split, down split (revert v5 training to v3 layout):**
   expected ~12.4 ms, same as v3, but with cleaner code.
-- **Variant B — gate+up packed, down split:** expected 12.1–12.2 ms if the
+- **Variant B, gate+up packed, down split:** expected 12.1–12.2 ms if the
   Triton epilogue can be made friendlier to the strided mega-output reads.
-- **Variant C — keep both packings but use a writable output for the down
+- **Variant C, keep both packings but use a writable output for the down
   GEMM via cublasLt with an explicit output layout that places A_down rows at
   a separate output buffer:** speculative, requires fixing the cublasLt
   wrapper, upside ~0.2–0.5 ms.

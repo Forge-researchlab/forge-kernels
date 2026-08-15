@@ -8,10 +8,10 @@
 
 | Metric | v2 | vs Unsloth | Verdict |
 |--------|-----|-----------|---------|
-| Time (rank=16) | 1.869ms | **1.09x faster** | Good — already beating SOTA |
-| Memory (delta) | 128 MB | **0.75x (33% worse)** | Fixable — see improvement #1 |
-| Launches | 6 (3 cuBLAS + 3 Triton) | vs 9 | Reducible to 2 — see #3 |
-| X HBM reads | 3× | vs 6× | Reducible to 1× — see #3 |
+| Time (rank=16) | 1.869ms | **1.09x faster** | Good, already beating SOTA |
+| Memory (delta) | 128 MB | **0.75x (33% worse)** | Fixable, see improvement #1 |
+| Launches | 6 (3 cuBLAS + 3 Triton) | vs 9 | Reducible to 2, see #3 |
+| X HBM reads | 3× | vs 6× | Reducible to 1×, see #3 |
 | Rank sensitivity | None (1.856–1.927ms) | vs Unsloth degrades at r=64 | Excellent |
 
 ---
@@ -24,7 +24,7 @@
 
 **Problem**: v2 allocates a new output tensor `Y` in the Triton epilogue while the packed output `[M, N+r]` still exists. Both coexist → 32 MB extra.
 
-**Solution**: Write the LoRA result in-place into `packed_output[:, :N]`. The epilogue reads `packed_output[:, N:]` (the XA columns) and `B`, computes `XA @ B^T`, adds it to `packed_output[:, :N]` in place. The last `r` columns become garbage (fine — we don't need them).
+**Solution**: Write the LoRA result in-place into `packed_output[:, :N]`. The epilogue reads `packed_output[:, N:]` (the XA columns) and `B`, computes `XA @ B^T`, adds it to `packed_output[:, :N]` in place. The last `r` columns become garbage (fine, we don't need them).
 
 ```python
 # Current v2 (allocates new Y):
@@ -53,13 +53,13 @@ Y = packed_output[:, :N]  # view, no copy
 
 ---
 
-## Improvement #3: Fully Packed QKV — Single cuBLAS Call (v2_3)
+## Improvement #3: Fully Packed QKV, Single cuBLAS Call (v2_3)
 
 **Impact**: Reduce X reads from 3× to **1×**. Potentially 1.15–1.20x Unsloth.
 **Effort**: Medium-High
 **Risk**: Medium (cuBLAS may select different algorithm for very wide output)
 
-**Problem**: v2 still does 3 separate cuBLAS calls, each reading X once (3 total). X is 64 MB — reading it 3 times = 192 MB bandwidth.
+**Problem**: v2 still does 3 separate cuBLAS calls, each reading X once (3 total). X is 64 MB, reading it 3 times = 192 MB bandwidth.
 
 **Solution**: Pack ALL projection weights into one matrix:
 ```
@@ -104,7 +104,7 @@ This is exactly what v2 does. CODA formalizes it and shows the epilogue can be p
 ## Improvement #6: autograd.Function Wrapper (v3)
 
 **Impact**: Enable training (backward pass). Required for production use.
-**Effort**: High (backward pass is complex — 12+ gradient computations)
+**Effort**: High (backward pass is complex, 12+ gradient computations)
 **Risk**: Medium (backward math must be exact)
 
 **What's needed**:

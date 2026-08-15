@@ -1,6 +1,6 @@
 # Forge LoRA demo (Qwen) — held-out inference samples
 
-Model: `Qwen/Qwen2.5-0.5B` + LoRA adapter from `lora_demo_qwen/lora_adapter`
+Model: `Qwen/Qwen2.5-0.5B` + LoRA adapter from `lora_demos/qwen/lora_adapter`
 
 All prompts are HELD OUT — they did **not** appear in training. Greedy decoding (`do_sample=False`), 32 new tokens.
 

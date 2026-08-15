@@ -1,10 +1,10 @@
 """Generate the 4 shareable artifacts from the Qwen training JSONL log.
 
 Reads:
-    artifacts/lora_demo_qwen/train_log.jsonl
-    artifacts/lora_demo_qwen/run_meta.json
+    artifacts/lora_demos/qwen/train_log.jsonl
+    artifacts/lora_demos/qwen/run_meta.json
 
-Produces (all under artifacts/lora_demo_qwen/):
+Produces (all under artifacts/lora_demos/qwen/):
     loss_curve.png, vram.png, step_time.png, summary.png, artifacts.md
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ import numpy as np
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ARTIFACTS_DIR = REPO_ROOT / "artifacts" / "lora_demo_qwen"
+ARTIFACTS_DIR = REPO_ROOT / "artifacts" / "lora_demos" / "qwen"
 LOG_PATH = ARTIFACTS_DIR / "train_log.jsonl"
 META_PATH = ARTIFACTS_DIR / "run_meta.json"
 

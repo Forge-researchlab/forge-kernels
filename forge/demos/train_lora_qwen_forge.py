@@ -44,7 +44,7 @@ from pirate_dataset import TRAIN_PAIRS, build_full_example
 
 MODEL_ID = "Qwen/Qwen2.5-0.5B"
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ARTIFACTS_DIR = REPO_ROOT / "artifacts" / "lora_demo_qwen"
+ARTIFACTS_DIR = REPO_ROOT / "artifacts" / "lora_demos" / "qwen"
 LOG_PATH = ARTIFACTS_DIR / "train_log.jsonl"
 RUN_META_PATH = ARTIFACTS_DIR / "run_meta.json"
 ADAPTER_DIR = ARTIFACTS_DIR / "lora_adapter"

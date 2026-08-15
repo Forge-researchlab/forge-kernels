@@ -1,6 +1,6 @@
-# RoPE Fused Q+K — Comparative Analysis & Design
+# RoPE Fused Q+K, Comparative Analysis & Design
 
-**Owner:** Shaurya (H2 — Forge Hackathon Day 1)
+**Owner:** Shaurya (H2, Forge Hackathon Day 1)
 **Status:** Draft (to be reviewed before implementation)
 **Date:** 2026-05-23
 **Ambition:** Match Unsloth-equivalent perf with a cleaner modular API. Forge's edge is the test/bench/registry infra around the kernel, not micro-architecture novelty.
@@ -17,7 +17,7 @@ The hackathon doc (`day1.html`, H2 task card) states:
 **This is backwards in the default code paths.** Reading the actual fetched sources:
 
 - **Liger's `_triton_rope`** is fused: grid `(batch * seq_len,)`, one program handles BOTH Q (across all Q heads) AND K (across all KV heads) for one token. Always single-launch.
-- **Unsloth's default `fast_rope_embedding`** (no `rope_embedding_indices` argument) calls `Fast_RoPE_Embedding.apply()` twice — once for Q, once for K — i.e. **two separate launches**. The fused `Fast_RoPE_Embedding_QK` kernel only runs when TRL-style rope indices are passed in.
+- **Unsloth's default `fast_rope_embedding`** (no `rope_embedding_indices` argument) calls `Fast_RoPE_Embedding.apply()` twice, once for Q, once for K, i.e. **two separate launches**. The fused `Fast_RoPE_Embedding_QK` kernel only runs when TRL-style rope indices are passed in.
 
 **Implication for our design:** Liger is the closer template for our HF-cos/sin training path. We still borrow Unsloth's clever GQA trick from `Fast_RoPE_Embedding_QK` (`if head_position < n_heads_K`), but the grid + fusion strategy is Liger-shaped.
 
@@ -46,15 +46,15 @@ This is structurally identical to the forward with `sin → -sin`. We exploit th
 
 **Dtype contract:**
 - Inputs Q, K: bf16 or fp16 (training dtype)
-- cos, sin: fp32 (HF computes these in fp32, casts at the end — we accept fp32 or input dtype)
+- cos, sin: fp32 (HF computes these in fp32, casts at the end, we accept fp32 or input dtype)
 - Internal accumulation: **fp32** (cast bf16/fp16 loads up to fp32 via `.to(tl.float32)`)
 - Output Q', K': same dtype as input (cast down on store)
 
 **Shape contract:**
-- `q.shape == (batch, n_q_heads, seq_len, head_dim)` — HF Qwen3 convention (n_heads dim is axis 1)
-- `k.shape == (batch, n_kv_heads, seq_len, head_dim)` — n_kv_heads ≤ n_q_heads (GQA)
-- `cos.shape == sin.shape == (batch, seq_len, head_dim)` OR `(1, seq_len, head_dim)` (broadcastable batch). HF passes the latter after `unsqueeze(unsqueeze_dim=1)` — our kernel handles both via `cos_batch_size`.
-- `head_dim` must be a power of 2 (Qwen3: 128). Partial RoPE (`rotary_dim < head_dim`) is **deferred** — not in Qwen3, defer to a v2 if needed.
+- `q.shape == (batch, n_q_heads, seq_len, head_dim)`, HF Qwen3 convention (n_heads dim is axis 1)
+- `k.shape == (batch, n_kv_heads, seq_len, head_dim)`, n_kv_heads ≤ n_q_heads (GQA)
+- `cos.shape == sin.shape == (batch, seq_len, head_dim)` OR `(1, seq_len, head_dim)` (broadcastable batch). HF passes the latter after `unsqueeze(unsqueeze_dim=1)`, our kernel handles both via `cos_batch_size`.
+- `head_dim` must be a power of 2 (Qwen3: 128). Partial RoPE (`rotary_dim < head_dim`) is **deferred**, not in Qwen3, defer to a v2 if needed.
 
 ---
 
@@ -66,18 +66,18 @@ Each row: how the 6 sources handle a dimension, plus **Forge's choice + one-line
 
 | Source | Approach |
 |---|---|
-| HF | Pure PyTorch — N/A |
+| HF | Pure PyTorch, N/A |
 | **Unsloth `Fast_RoPE_Embedding`** (default) | Per-tensor: grid `(b·s, n_groups)` where `n_groups = ceil(n_heads / 4)`. Processes 4 heads per program (ROPE_GROUP_SIZE). Q and K in separate launches. |
 | **Unsloth `Fast_RoPE_Embedding_QK`** (TRL indices only) | Fused: grid `(b·s, n_heads_Q)`. Each program does 1 Q head + (if `head_pos < n_heads_K`) 1 K head. |
 | **Liger** | Fused: grid `(b·s,)`. Each program does ALL Q heads + ALL K heads for one token. Tile = `(pad_n_qh, hd/2)` and `(pad_n_kh, hd/2)`. |
 | Megatron / TE | Per-tensor (called twice). CUDA grid `(s, b)`. Inside block: `(blockDim.x, blockDim.y)` tile across `(d2, h)`. |
-| TorchTitan | Pure PyTorch — N/A |
+| TorchTitan | Pure PyTorch, N/A |
 
 **Forge choice: grid `(batch · seq_len, n_heads_Q)`** with Unsloth-QK's GQA mask trick.
 
 **Why:**
-- Liger's `(b·s,)` 1-D grid launches just `4 × 2048 = 8192` programs at Qwen3 demo shapes. With Qwen2.5-0.5B (n_q=14, n_kv=2, head_dim=64) the per-program tile is `(16, 32)` which is fine for registers — but for the larger Qwen3-8B (n_q=32, n_kv=8, head_dim=128) the tile becomes `(32, 64)` for Q alone, which starts pressuring registers. We want headroom.
-- Unsloth-QK's `(b·s, n_qh)` grid launches `8192 × 14 = 114,688` programs on demo shape, `8192 × 32 = 262,144` on Qwen3-8B. Per-program tile is just `(hd/2,)` — small, register-friendly, more SMs saturated.
+- Liger's `(b·s,)` 1-D grid launches just `4 × 2048 = 8192` programs at Qwen3 demo shapes. With Qwen2.5-0.5B (n_q=14, n_kv=2, head_dim=64) the per-program tile is `(16, 32)` which is fine for registers, but for the larger Qwen3-8B (n_q=32, n_kv=8, head_dim=128) the tile becomes `(32, 64)` for Q alone, which starts pressuring registers. We want headroom.
+- Unsloth-QK's `(b·s, n_qh)` grid launches `8192 × 14 = 114,688` programs on demo shape, `8192 × 32 = 262,144` on Qwen3-8B. Per-program tile is just `(hd/2,)`, small, register-friendly, more SMs saturated.
 - The GQA mask trick (`if head_pos < n_heads_K`) keeps the K work inside the same launch without inflating grid dimensions.
 - **Cost:** cos/sin are loaded redundantly across programs of the same token (once per program instead of once per token). The redundancy is `n_heads_Q × head_dim/2 × 4 bytes` per token = trivial compared to Q traffic.
 
@@ -93,7 +93,7 @@ Each row: how the 6 sources handle a dimension, plus **Forge's choice + one-line
 
 **Forge choice: accept HF-format full `head_dim` cos/sin, load only the first half.**
 
-**Why:** Zero-friction `forge.patch` integration — we receive exactly what `Qwen3RotaryEmbedding.forward()` returns. The wasted `head_dim/2` of cos/sin memory is `(seq_len × head_dim/2 × 2B) ≈ 256KB` at demo shape — negligible. Not worth the API friction of slicing.
+**Why:** Zero-friction `forge.patch` integration, we receive exactly what `Qwen3RotaryEmbedding.forward()` returns. The wasted `head_dim/2` of cos/sin memory is `(seq_len × head_dim/2 × 2B) ≈ 256KB` at demo shape, negligible. Not worth the API friction of slicing.
 
 **Not choosing TE's in-kernel sincos:** We need fp32 accuracy without CUDA intrinsics. Triton's `tl.cos`/`tl.sin` exist but pre-computing once per forward is simpler and the cos/sin are reusable across attention layers within the same model (HF caches them on the rotary module).
 
@@ -110,7 +110,7 @@ Each row: how the 6 sources handle a dimension, plus **Forge's choice + one-line
 
 **Forge choice: caller-precomputed cos/sin, saved via `ctx.save_for_backward(cos, sin)`.**
 
-**Why:** Compatible with HF's `Qwen3RotaryEmbedding` which already caches `inv_freq` and recomputes cos/sin per call (cheap — `seq_len × head_dim/2` mul + sincos). `save_for_backward` is the right idiom for backward dependencies (handles FSDP2 correctly; that's literally the smoke test we need to pass). Unsloth's `ctx.cos = cos` approach is **wrong under FSDP2** and would break the H15 smoke test.
+**Why:** Compatible with HF's `Qwen3RotaryEmbedding` which already caches `inv_freq` and recomputes cos/sin per call (cheap, `seq_len × head_dim/2` mul + sincos). `save_for_backward` is the right idiom for backward dependencies (handles FSDP2 correctly; that's literally the smoke test we need to pass). Unsloth's `ctx.cos = cos` approach is **wrong under FSDP2** and would break the H15 smoke test.
 
 ### 2.4 Rotation layout (split-half vs interleaved vs complex)
 
@@ -134,26 +134,26 @@ Each row: how the 6 sources handle a dimension, plus **Forge's choice + one-line
 | HF | Each tensor handled independently (`q` and `k` separately in apply). |
 | Unsloth-QK | `(b·s, n_heads_Q)` grid + `if head_position < n_heads_K` mask. |
 | Liger | Loads `(pad_n_qh, hd/2)` and `(pad_n_kh, hd/2)` 2D tiles separately, mask via `tl.arange(...) < n_qh`, `... < n_kh`. |
-| TE / Megatron | Per-tensor — GQA handled by caller calling kernel twice with different shapes. |
+| TE / Megatron | Per-tensor, GQA handled by caller calling kernel twice with different shapes. |
 | TorchTitan | Per-tensor apply, called twice. |
 
-**Forge choice: Unsloth-QK's mask trick — `if head_position < n_heads_K: do K work`.**
+**Forge choice: Unsloth-QK's mask trick, `if head_position < n_heads_K: do K work`.**
 
-**Why:** Simplest, no padded 2D tiles, scales to any n_q_heads / n_kv_heads ratio without special cases. We already chose Unsloth-QK's grid in §2.1 — this falls out of that choice.
+**Why:** Simplest, no padded 2D tiles, scales to any n_q_heads / n_kv_heads ratio without special cases. We already chose Unsloth-QK's grid in §2.1, this falls out of that choice.
 
 ### 2.6 BLOCK_SIZE strategy
 
 | Source | Approach |
 |---|---|
-| Unsloth-QK | `calculate_settings(head_dim)` — picks BLOCK_SIZE based on dim. |
+| Unsloth-QK | `calculate_settings(head_dim)`, picks BLOCK_SIZE based on dim. |
 | Unsloth default | `calculate_settings(head_dim // 2)`. |
-| Liger | `max(pad_n_qh, pad_n_kvh)` — block covers head dim, not column dim. |
+| Liger | `max(pad_n_qh, pad_n_kvh)`, block covers head dim, not column dim. |
 | TE | CUDA `blockDim` configured externally. |
 | Megatron | N/A (dispatcher). |
 
 **Forge choice: `BLOCK_SIZE = triton.next_power_of_2(head_dim // 2)` with `num_warps` chosen by a small autotune (`[2, 4, 8]`).**
 
-**Why:** Our grid is `(b·s, n_qh)` — per-program work is `head_dim/2` columns. For Qwen3 `head_dim=128`, BLOCK_SIZE=64. For arbitrary head_dim (Gemma is 256, some smaller models are 64), pow-2 padding handles it cleanly. Autotune `num_warps` only — `BLOCK_SIZE` is fixed by head_dim so no tuning there.
+**Why:** Our grid is `(b·s, n_qh)`, per-program work is `head_dim/2` columns. For Qwen3 `head_dim=128`, BLOCK_SIZE=64. For arbitrary head_dim (Gemma is 256, some smaller models are 64), pow-2 padding handles it cleanly. Autotune `num_warps` only, `BLOCK_SIZE` is fixed by head_dim so no tuning there.
 
 ### 2.7 Backward strategy
 
@@ -161,25 +161,25 @@ Each row: how the 6 sources handle a dimension, plus **Forge's choice + one-line
 |---|---|
 | Unsloth | Same kernel with `BACKWARD_PASS=True` constexpr, sin negated. |
 | Liger | Same kernel with `BACKWARD_PASS=True` constexpr, sign flips on the multiply ops. |
-| TE | Dedicated `fused_rope_backward_kernel` — needed because TE works with raw `freqs` (not cos/sin), so the partner-position sin lookup differs in backward. |
+| TE | Dedicated `fused_rope_backward_kernel`, needed because TE works with raw `freqs` (not cos/sin), so the partner-position sin lookup differs in backward. |
 | Megatron | N/A. |
 | TorchTitan | N/A (PyTorch autograd). |
 
 **Forge choice: shared kernel with `BACKWARD_PASS: tl.constexpr`, sin negated after load.**
 
-**Why:** Math is exact for the HF cos/sin convention (we verified in §1). Halves kernel-code surface. Constexpr-driven branch — zero runtime cost (Triton specializes).
+**Why:** Math is exact for the HF cos/sin convention (we verified in §1). Halves kernel-code surface. Constexpr-driven branch, zero runtime cost (Triton specializes).
 
 ### 2.8 Numerical precision / fp32 accumulation
 
 | Source | Approach |
 |---|---|
 | HF | Computes cos/sin in fp32 inside `@torch.no_grad()`, casts to input dtype before apply. The apply itself runs in input dtype. |
-| Unsloth-QK | bf16/fp16 throughout — relies on Triton's internal upcasting for mul/add. **Risk:** subtle precision loss vs HF. |
-| Unsloth default | `.to(sin1.dtype)` — casts Q to sin's dtype (typically fp32 since cos/sin are fp32 in HF). |
-| Liger | `.to(sin_row.dtype)` — same pattern as Unsloth default. |
+| Unsloth-QK | bf16/fp16 throughout, relies on Triton's internal upcasting for mul/add. **Risk:** subtle precision loss vs HF. |
+| Unsloth default | `.to(sin1.dtype)`, casts Q to sin's dtype (typically fp32 since cos/sin are fp32 in HF). |
+| Liger | `.to(sin_row.dtype)`, same pattern as Unsloth default. |
 | TE | Explicit `float v_src = src[...]`, computes in float, casts back on store. |
 
-**Forge choice: explicit fp32 accumulation — `q0 = tl.load(...).to(tl.float32)`, compute in fp32, cast back to input dtype on store.**
+**Forge choice: explicit fp32 accumulation, `q0 = tl.load(...).to(tl.float32)`, compute in fp32, cast back to input dtype on store.**
 
 **Why:** Liger's `.to(sin_row.dtype)` only works if cos/sin are fp32 (which HF guarantees, but not by contract). Explicit `.to(tl.float32)` is unambiguous and guarantees rtol=1e-5 against HF reference. This is also what FORGE_CONTEXT.md mandates ("fp32 accumulation for all kernels").
 
@@ -188,11 +188,11 @@ Each row: how the 6 sources handle a dimension, plus **Forge's choice + one-line
 | Source | Approach |
 |---|---|
 | HF | `config.rope_parameters["rope_theta"]` (base) + `ROPE_INIT_FUNCTIONS[rope_type]` for scaled variants (YaRN, NTK, Llama3). |
-| Unsloth / Liger | Take cos/sin as inputs — base handling is the caller's problem. |
+| Unsloth / Liger | Take cos/sin as inputs, base handling is the caller's problem. |
 | TE | `rotary_base: float = 10000.0` constructor arg; only basic linear interpolation supported in module. |
 | TorchTitan | Config-driven: `theta`, `scaling: "none"|"llama"|"yarn"`, full YaRN params on the Config dataclass. |
 
-**Forge choice: kernel takes cos/sin only — base + scaling lives on the `ForgeRoPE(nn.Module)` constructor.**
+**Forge choice: kernel takes cos/sin only, base + scaling lives on the `ForgeRoPE(nn.Module)` constructor.**
 
 ```python
 class ForgeRoPE(nn.Module):
@@ -202,9 +202,9 @@ class ForgeRoPE(nn.Module):
 ```
 
 **Why:**
-- Keeps the kernel simple — no compile-time `scaling` constexpr.
+- Keeps the kernel simple, no compile-time `scaling` constexpr.
 - API matches HF: Gemma just constructs with `base=<gemma_value>` (P8's "trivial 20-min change" per the hackathon plan).
-- YaRN/Llama-scaling — when needed (CP3+) — slots in by changing the precompute, not the kernel. TorchTitan's design proves this layering is clean.
+- YaRN/Llama-scaling, when needed (CP3+), slots in by changing the precompute, not the kernel. TorchTitan's design proves this layering is clean.
 
 ### 2.10 In-place vs out-of-place
 
@@ -218,7 +218,7 @@ class ForgeRoPE(nn.Module):
 
 **Forge choice: out-of-place by default, optional in-place via a flag (defer to v2).**
 
-**Why:** In-place is faster (no allocator hit, half the HBM writes) but breaks autograd ordering if anything else aliases Q/K. Out-of-place is safer for the hackathon — we can prove correctness without fighting alias issues. In-place is a v2 speedup once we have benchmarks showing it's worth the risk. Note: Unsloth's "in-place if contiguous else clone" is a reasonable compromise we may adopt later.
+**Why:** In-place is faster (no allocator hit, half the HBM writes) but breaks autograd ordering if anything else aliases Q/K. Out-of-place is safer for the hackathon, we can prove correctness without fighting alias issues. In-place is a v2 speedup once we have benchmarks showing it's worth the risk. Note: Unsloth's "in-place if contiguous else clone" is a reasonable compromise we may adopt later.
 
 ---
 
@@ -304,7 +304,7 @@ def _forge_rope_kernel(
         tl.store(out_k_row_ptr + col_offsets + HALF_HEAD_DIM,  out_k_hi, mask=col_mask)
 ```
 
-**Note on GQA mask correctness:** Unsloth-QK uses `if head_position < n_heads_K` (a compile-time-friendly Python `if` since `head_pos` is a `tl.program_id` scalar). Triton handles this as a thread-group branch — no warp divergence within a program. This is the right pattern.
+**Note on GQA mask correctness:** Unsloth-QK uses `if head_position < n_heads_K` (a compile-time-friendly Python `if` since `head_pos` is a `tl.program_id` scalar). Triton handles this as a thread-group branch, no warp divergence within a program. This is the right pattern.
 
 ### 3.2 autograd.Function wrapper
 
@@ -381,16 +381,16 @@ class ForgeRoPE(nn.Module):
         super().__init__()
         self.head_dim = head_dim
         self.rotary_dim = int(head_dim * rotary_percent)
-        assert self.rotary_dim == head_dim, "Partial RoPE deferred — v2"
+        assert self.rotary_dim == head_dim, "Partial RoPE deferred, v2"
         self.base = base
         # cos/sin precompute lives in the HF rotary embedding module that calls us.
-        # ForgeRoPE is the *apply* step only — matches HF's split.
+        # ForgeRoPE is the *apply* step only, matches HF's split.
 
     def forward(self, q, k, cos, sin):
         return ForgeRoPEFunction.apply(q, k, cos, sin)
 ```
 
-Per the H8 patch wiring: `forge.patch(model)` replaces `apply_rotary_pos_emb` in `modeling_qwen3.py` with `ForgeRoPE.forward` (after instantiation). The `Qwen3RotaryEmbedding` module that produces cos/sin stays as-is — we plug in only at the apply step. (For Gemma the patch passes a different `base` to `Qwen3RotaryEmbedding`-equivalent; that's P8's wiring concern, not ours.)
+Per the H8 patch wiring: `forge.patch(model)` replaces `apply_rotary_pos_emb` in `modeling_qwen3.py` with `ForgeRoPE.forward` (after instantiation). The `Qwen3RotaryEmbedding` module that produces cos/sin stays as-is, we plug in only at the apply step. (For Gemma the patch passes a different `base` to `Qwen3RotaryEmbedding`-equivalent; that's P8's wiring concern, not ours.)
 
 ---
 
@@ -426,7 +426,7 @@ Lives in `kernels/rope/tests/test_rope.py`. Three levels per the Forge kernel co
 - Must match exactly (same tolerances as 4.2).
 
 ### 4.4 Edge cases
-- Non-contiguous Q/K (transposed input) — must not crash, output correct.
+- Non-contiguous Q/K (transposed input), must not crash, output correct.
 - cos/sin with `shape[0] == 1` (broadcast batch) and `shape[0] == batch`.
 - `n_kv == n_q` (no GQA).
 - `n_kv == 1` (MQA).
@@ -438,9 +438,9 @@ Lives in `kernels/rope/tests/test_rope.py`. Three levels per the Forge kernel co
 Lives in `kernels/rope/benchmarks/bench_rope.py`. Single benchmark harness.
 
 **Compared against:**
-1. **PyTorch reference** (HF `apply_rotary_pos_emb`) — baseline.
-2. **Liger `liger_rotary_pos_emb`** — our closest peer (single-launch fused).
-3. **Unsloth `fast_rope_embedding`** — the hackathon's stated reference.
+1. **PyTorch reference** (HF `apply_rotary_pos_emb`), baseline.
+2. **Liger `liger_rotary_pos_emb`**, our closest peer (single-launch fused).
+3. **Unsloth `fast_rope_embedding`**, the hackathon's stated reference.
 
 **Metrics:**
 - Forward latency (µs)
@@ -461,34 +461,34 @@ Lives in `kernels/rope/benchmarks/bench_rope.py`. Single benchmark harness.
 - cos/sin: 2 × 4·2048·128·2B = 4MB
 - Total ≈ 164MB
 - H100 HBM ≈ 3 TB/s → floor ≈ 55µs
-- Anything > 110µs means we're losing ≥50% of bandwidth — investigate.
+- Anything > 110µs means we're losing ≥50% of bandwidth, investigate.
 
 ---
 
 ## 6. Open questions / risks before implementation
 
-1. **GQA mask trick under autotune.** Unsloth-QK's `if head_pos < n_heads_K` works because `head_pos` is a `program_id` scalar. If we autotune over `num_warps` only, this should be safe — but worth verifying the generated PTX doesn't introduce divergence.
+1. **GQA mask trick under autotune.** Unsloth-QK's `if head_pos < n_heads_K` works because `head_pos` is a `program_id` scalar. If we autotune over `num_warps` only, this should be safe, but worth verifying the generated PTX doesn't introduce divergence.
 
 2. **In-place vs out-of-place.** Plan keeps out-of-place. If benchmarks come back at <1.3× target, the easiest win is allocating output to the same buffer as input (in-place). Defer this decision to post-benchmark.
 
-3. **Partial RoPE (`rotary_percent < 1.0`).** Deferred. Qwen3 doesn't need it. If H8/Gemma wiring surfaces a need, we add `ROTARY_DIM: tl.constexpr` and a pass-through tail branch — TE's CUDA kernel shows the pattern (lines 59-69 of `fused_rope.cu`).
+3. **Partial RoPE (`rotary_percent < 1.0`).** Deferred. Qwen3 doesn't need it. If H8/Gemma wiring surfaces a need, we add `ROTARY_DIM: tl.constexpr` and a pass-through tail branch, TE's CUDA kernel shows the pattern (lines 59-69 of `fused_rope.cu`).
 
-4. **Non-contiguous input handling.** Plan accepts arbitrary strides via per-tensor stride args (like Unsloth-QK). May want to add a fast-path `.contiguous()` for the common case if benchmarks show non-contiguous strides hurt — Liger does this (`q = q.contiguous()`).
+4. **Non-contiguous input handling.** Plan accepts arbitrary strides via per-tensor stride args (like Unsloth-QK). May want to add a fast-path `.contiguous()` for the common case if benchmarks show non-contiguous strides hurt, Liger does this (`q = q.contiguous()`).
 
-5. **torch.compile compatibility.** Liger is fully compatible; Unsloth disables it (`@torch.compiler.disable`). We're a thin autograd.Function — should be compile-compatible by default. Sanity-check in tests.
+5. **torch.compile compatibility.** Liger is fully compatible; Unsloth disables it (`@torch.compiler.disable`). We're a thin autograd.Function, should be compile-compatible by default. Sanity-check in tests.
 
-6. **FSDP2 readiness (H15 smoke test).** Our kernel doesn't hold model weights — only cos/sin (per-call buffers, not parameters). `ctx.save_for_backward(cos, sin)` is the right idiom and survives FSDP2 sharding. We're fine on the smoke test as long as we don't store cos/sin as module parameters.
+6. **FSDP2 readiness (H15 smoke test).** Our kernel doesn't hold model weights, only cos/sin (per-call buffers, not parameters). `ctx.save_for_backward(cos, sin)` is the right idiom and survives FSDP2 sharding. We're fine on the smoke test as long as we don't store cos/sin as module parameters.
 
 ---
 
 ## 7. Implementation order
 
-1. `kernels/rope/rope_v1.py` — port the pseudocode in §3 to working Triton. Forward only.
-2. `tests/test_rope.py::test_forward_correctness` — verify against HF on the demo shape.
+1. `kernels/rope/rope_v1.py`, port the pseudocode in §3 to working Triton. Forward only.
+2. `tests/test_rope.py::test_forward_correctness`, verify against HF on the demo shape.
 3. Add backward branch in the kernel.
-4. `tests/test_rope.py::test_gradcheck` — fp64 verification.
-5. `tests/test_rope.py::test_backward_correctness` — bf16/fp16 sweep.
-6. `benchmarks/bench_rope.py` — measure vs PyTorch + Liger + Unsloth.
+4. `tests/test_rope.py::test_gradcheck`, fp64 verification.
+5. `tests/test_rope.py::test_backward_correctness`, bf16/fp16 sweep.
+6. `benchmarks/bench_rope.py`, measure vs PyTorch + Liger + Unsloth.
 7. Wrap in `ForgeRoPE(nn.Module)` and register in the kernel registry (H7's scaffold).
 8. Hand off to P8 for `forge.patch(Qwen3)` wiring (H10 Day 2 morning).
 

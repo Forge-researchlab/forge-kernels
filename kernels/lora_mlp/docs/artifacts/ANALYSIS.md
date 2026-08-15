@@ -93,11 +93,11 @@ The derivative of SiLU is: `d/dx SiLU(x) = sigmoid(x) + x * sigmoid(x) * (1 - si
 
 ### Key Design Decisions
 
-1. **Row-parallel grid**: one thread block per token row — simple but limits parallelism to `B*S`
+1. **Row-parallel grid**: one thread block per token row, simple but limits parallelism to `B*S`
 2. **fp32 accumulation**: sigmoid always computed in fp32 for stability
 3. **In-place backward**: gradients overwrite the saved tensors (`a` and `b`), cutting memory by 2x
 4. **Recomputation**: forward recomputes `sigmoid` in backward rather than saving it (classic memory/compute trade-off)
-5. **No matmul fusion**: the intermediate dimension `I` (e.g., 14336 for LLaMA-8B) is too large for SRAM, so fusing the matmul would require tiled output accumulation — Liger chose simplicity
+5. **No matmul fusion**: the intermediate dimension `I` (e.g., 14336 for LLaMA-8B) is too large for SRAM, so fusing the matmul would require tiled output accumulation, Liger chose simplicity
 
 ### Memory Savings
 
@@ -121,7 +121,7 @@ Unsloth fuses the **entire MLP autograd graph** including LoRA, but at the **PyT
 Specifically:
 1. **Autograd fusion**: the entire MLP (3 base matmuls + 6 LoRA matmuls + SwiGLU + all gradients) is a single `torch.autograd.Function`
 2. **SwiGLU Triton kernels**: pointwise activation fused via Triton (similar to Liger but with in-place buffer reuse)
-3. **LoRA matmuls**: done via `matmul_lora()` which calls `torch.matmul` + `addmm_` — standard cuBLAS, not fused
+3. **LoRA matmuls**: done via `matmul_lora()` which calls `torch.matmul` + `addmm_`, standard cuBLAS, not fused
 
 ### Architecture
 
@@ -179,7 +179,7 @@ h_row = f_row * g_row
 tl.store(h + offsets, h_row, mask=mask)
 ```
 
-**Backward** (`_DWf_DW_dfg_kernel`) — the clever part:
+**Backward** (`_DWf_DW_dfg_kernel`), the clever part:
 - Takes 3 input buffers (DW, e, g) and **overwrites all 3 with different results**
 - `DW` (which held `dY @ W_down^T`) is overwritten with `h = f * g` (needed for down LoRA grads)
 - `e` (which held gate pre-activations) is overwritten with `df = DW * f` (up-projection gradient)

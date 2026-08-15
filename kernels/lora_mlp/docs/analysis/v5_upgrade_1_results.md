@@ -15,16 +15,16 @@
 
 ## Changes vs v5
 
-1. **Drop down-phase packing** — revert to v3's two-cuBLAS-call pattern
+1. **Drop down-phase packing**, revert to v3's two-cuBLAS-call pattern
    plus `addmm_` on the contiguous `out` buffer (no `.contiguous()` copy,
    clean N=H tile for cuBLAS).
-2. **Pad gate+up mega-matrix to a multiple of 128** — append zero-rows so
+2. **Pad gate+up mega-matrix to a multiple of 128**, append zero-rows so
    `N = ceil((2*I + 2*r) / 128) * 128`. At LLaMA-8B/r=16 that's
    28704 → 28800 (96 zero rows). Padded columns of the result are
    zero @ X = 0 and ignored when slicing.
 
 Inference path is the v5 path verbatim (re-exported, not re-implemented).
-Backward is the same Unsloth-style in-place pattern as v3/v5 — packing
+Backward is the same Unsloth-style in-place pattern as v3/v5, packing
 doesn't help backward because each backward matmul has a different LHS.
 
 ## Microbench (matmul-only)
@@ -119,7 +119,7 @@ the launch-savings benefit at long last:
   `g_base` as separate contiguous buffers (two cuBLAS calls) and only
   pack the LoRA-A skinny matmuls. Trades 1 launch for clean strides;
   expected ~0.1-0.2 ms gain on the epilogue. Different algorithmic
-  family — would be v6.
+  family, would be v6.
 * **CUDA 12.5 + cublasLt SWISH for inference.** This box runs CUDA 12.4,
   so the inference fast-path falls back to a 4-launch version with one
   Triton kernel. CUDA 12.5+ would replace that with a fused matmul+SiLU

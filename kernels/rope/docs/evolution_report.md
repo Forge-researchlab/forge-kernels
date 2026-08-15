@@ -1,10 +1,10 @@
-# ForgeRoPE Kernel — V1 → V2 → V3 Evolution Report
+# ForgeRoPE Kernel, V1 → V2 → V3 Evolution Report
 
 **Author:** Shaurya (with Claude as pair)
 **Hardware:** NVIDIA A100-SXM4-80GB (compute capability 8.0)
 **Software:** PyTorch 2.4.1 + CUDA 12.4, Triton 3.0.0
 **Dates:** 2026-05-23 (Forge Hackathon Day 1)
-**Target:** Fused Q+K Rotary Position Embedding kernel for the H2 task — drop-in replacement for HF's `apply_rotary_pos_emb` in Qwen3.
+**Target:** Fused Q+K Rotary Position Embedding kernel for the H2 task, drop-in replacement for HF's `apply_rotary_pos_emb` in Qwen3.
 
 ---
 
@@ -42,8 +42,8 @@ We collected 6 reference implementations into `kernels/rope/rope_knowledge_base/
 
 - **The hackathon plan's claim was wrong**: the plan says "Liger applies RoPE to Q and K separately; Unsloth fuses them." In practice, **Liger always fuses Q+K in one launch** (grid `(b·s,)`), and **Unsloth's default `fast_rope_embedding` path runs Q and K in separate launches**. Only Unsloth's `Fast_RoPE_Embedding_QK` (activated by passing TRL-style `rope_embedding_indices`) is genuinely fused.
 - **HF's `apply_rotary_pos_emb`** is our correctness oracle. It uses split-half rotation (`rotate_half(x) = cat((-x_hi, x_lo))`) with full-width cos/sin (the second half is a clone of the first).
-- **TransformerEngine** is a CUDA kernel — not directly portable to Triton, but useful as the production-grade reference for grid shape decisions.
-- **TorchTitan**'s shared RoPE module covers Llama, DeepSeek-V3, and Qwen3 with cos/sin and complex-number formulations, plus YaRN scaling — a good API extensibility reference.
+- **TransformerEngine** is a CUDA kernel, not directly portable to Triton, but useful as the production-grade reference for grid shape decisions.
+- **TorchTitan**'s shared RoPE module covers Llama, DeepSeek-V3, and Qwen3 with cos/sin and complex-number formulations, plus YaRN scaling, a good API extensibility reference.
 
 ### 1.3 The math
 
@@ -60,9 +60,9 @@ dx[b, h, s, d]              = dy[b, h, s, d]              · cos[s, d] + dy[b, h
 dx[b, h, s, d + head_dim/2] = dy[b, h, s, d + head_dim/2] · cos[s, d] − dy[b, h, s, d]              · sin[s, d]
 ```
 
-**Key observation:** the backward is *structurally identical* to the forward with `sin → −sin`. We exploit this — all three versions use a single Triton kernel with a `BACKWARD_PASS: tl.constexpr` flag that negates `sin` after loading. This halves the code surface, and Triton specializes the constexpr branch at compile time (zero runtime cost; backward is a separate compiled binary).
+**Key observation:** the backward is *structurally identical* to the forward with `sin → −sin`. We exploit this, all three versions use a single Triton kernel with a `BACKWARD_PASS: tl.constexpr` flag that negates `sin` after loading. This halves the code surface, and Triton specializes the constexpr branch at compile time (zero runtime cost; backward is a separate compiled binary).
 
-The math equivalence is *exact* for the HF cos/sin convention because `cos[d_lo] == cos[d_hi]` and `sin[d_lo] == sin[d_hi]` for `d_hi = d_lo + head_dim/2` (HF builds `emb = cat((freqs, freqs))`). TransformerEngine uses a different convention (raw `freqs`, sincos computed in-kernel) which requires a separate backward — we don't pay that cost.
+The math equivalence is *exact* for the HF cos/sin convention because `cos[d_lo] == cos[d_hi]` and `sin[d_lo] == sin[d_hi]` for `d_hi = d_lo + head_dim/2` (HF builds `emb = cat((freqs, freqs))`). TransformerEngine uses a different convention (raw `freqs`, sincos computed in-kernel) which requires a separate backward, we don't pay that cost.
 
 ---
 
@@ -183,7 +183,7 @@ This hypothesis directly motivated V2's grid restructuring.
 
 For any GQA model (n_q > n_kv), there's a natural grouping: **G = n_q // n_kv Q heads share each K head**. For Qwen3-8B (n_q=32, n_kv=8), G=4. For Llama-3 (similar GQA ratio), G=4. For MQA, G=n_q. For MHA, G=1.
 
-V1 wastes this structure. Its grid is `(b·s, n_q)` — for every token, n_q programs run, each loading its own copy of cos/sin and producing one Q head's output. The K work is bolted on via an `if head_pos < n_kv` mask, meaning `n_q − n_kv` programs do *only* Q work (load imbalance).
+V1 wastes this structure. Its grid is `(b·s, n_q)`, for every token, n_q programs run, each loading its own copy of cos/sin and producing one Q head's output. The K work is bolted on via an `if head_pos < n_kv` mask, meaning `n_q − n_kv` programs do *only* Q work (load imbalance).
 
 V2's grid is `(b·s, n_kv)`. Each program handles exactly **G Q heads + 1 K head**. Every program does identical work. cos/sin are loaded once and reused across all G+1 heads.
 
@@ -211,7 +211,7 @@ cos/sin are broadcast via `[None, :]`:
 out_q_lo = q_lo * cos_row[None, :] - q_hi * sin_row[None, :]
 ```
 
-For non-power-of-2 G (e.g., a hypothetical model with G=7), we'd use `G_BLOCK = next_pow2(G)` and mask the unused lanes — but no real model has non-power-of-2 G.
+For non-power-of-2 G (e.g., a hypothetical model with G=7), we'd use `G_BLOCK = next_pow2(G)` and mask the unused lanes, but no real model has non-power-of-2 G.
 
 ### 4.3 Results
 
@@ -222,11 +222,11 @@ Correctness: 30/30 forward, 8/8 backward, gradcheck PASS. **V2 is bit-exact with
 | qwen3_8b_short (b=4, s=512) | 99.5 µs | 41.4 µs | **2.40×** |
 | qwen3_8b_train (b=2, s=2048) | 190.7 µs | 74.6 µs | **2.56×** |
 | mqa_extreme (n_kv=1) | 29.0 µs | 14.5 µs | **2.00×** |
-| mha_no_gqa (n_q=n_kv=16) | 68.2 µs | 69.9 µs | **0.97×** (G=1 case — no benefit) |
+| mha_no_gqa (n_q=n_kv=16) | 68.2 µs | 69.9 µs | **0.97×** (G=1 case, no benefit) |
 
 **V2 also beats Unsloth-fused-QK** on every GQA-shape: Qwen3-8B train V2 75 µs vs Unsloth-QK 184 µs = **2.45× faster**. Bandwidth utilization went 22% → **57%** on the target.
 
-Backward timing on Qwen3-8B train: V1=193 µs, V2=80 µs — also **2.54× faster**. The same grid restructuring benefits the backward kernel.
+Backward timing on Qwen3-8B train: V1=193 µs, V2=80 µs, also **2.54× faster**. The same grid restructuring benefits the backward kernel.
 
 ### 4.4 Why the win was much bigger than predicted
 
@@ -237,7 +237,7 @@ In the design doc I predicted a 5–15% improvement from V2's head grouping. Act
 **The actual data showed V1 was launch-overhead-bound, not bandwidth-bound:**
 - V1 BW: 445 GB/s (22% of A100 peak)
 - If V1 were bandwidth-bound, it'd be closer to peak
-- 22% utilization means ~78% of kernel time was *not* memory traffic — it was launcher overhead and warp coordination on programs too small to amortize their dispatch cost
+- 22% utilization means ~78% of kernel time was *not* memory traffic, it was launcher overhead and warp coordination on programs too small to amortize their dispatch cost
 
 V2's 4× reduction in program count (262K → 65K for Qwen3-8B) gave each program enough work (G=4 Q heads + 1 K head) to amortize the launch dispatch. The kernel went from launch-bound to actually bandwidth-bound.
 
@@ -259,8 +259,8 @@ The G=1 case is the structural limitation of V2's design: when there's no GQA, t
 ### 5.1 The remaining gap
 
 V2 hit 57% of A100 peak bandwidth on Qwen3-8B target. The remaining 43% is:
-- Real arithmetic work (~6 FLOPs/element — can't skip)
-- Strided per-head memory access (per-head stride = seq_len × head_dim = 256 KB at our target — defeats coalescing)
+- Real arithmetic work (~6 FLOPs/element, can't skip)
+- Strided per-head memory access (per-head stride = seq_len × head_dim = 256 KB at our target, defeats coalescing)
 - Kernel launch overhead (~3–5 µs fixed)
 - Suboptimal `num_warps` per shape (V2 hardcoded num_warps=4)
 
@@ -285,7 +285,7 @@ def _forge_rope_v3_kernel(...):
 
 Cost: first call per (constexpr combo, seq_len) measures all 8 configs and caches the winner. Subsequent calls free.
 
-### 5.3 Results — the autotune picks
+### 5.3 Results, the autotune picks
 
 The autotuner's choice across every shape × dtype × forward/backward we tested:
 
@@ -306,11 +306,11 @@ The autotuner's choice across every shape × dtype × forward/backward we tested
 
 For a memory-bound kernel with small per-program tiles (V3 tile = `(G, head_dim/2) ≤ (8, 64) = 512 elements`), more warps doesn't help:
 
-1. **There isn't enough work to hide warp-scheduling overhead.** With num_warps=4 (128 threads) on a 512-element tile, each thread does 4 ops. With num_warps=2 (64 threads), each thread does 8 ops — better instruction-level amortization of register loads.
+1. **There isn't enough work to hide warp-scheduling overhead.** With num_warps=4 (128 threads) on a 512-element tile, each thread does 4 ops. With num_warps=2 (64 threads), each thread does 8 ops, better instruction-level amortization of register loads.
 2. **Fewer warps = more programs fit per SM.** A100 SMs can host multiple resident programs as long as register and shared-memory budgets fit. num_warps=2 cuts the per-program warp footprint in half, doubling resident program count and improving SM occupancy for our small kernel.
-3. **For G=1 (MHA), num_warps=4 was actively wasting threads.** A program doing one head × 64 cols = 64 elements gets one element per thread with num_warps=4. That's pure overhead. num_warps=2 makes each thread do 2 elements — actually meaningful work.
+3. **For G=1 (MHA), num_warps=4 was actively wasting threads.** A program doing one head × 64 cols = 64 elements gets one element per thread with num_warps=4. That's pure overhead. num_warps=2 makes each thread do 2 elements, actually meaningful work.
 
-This is slightly counterintuitive — the conventional wisdom is "more warps = better latency hiding." That's true for compute-bound kernels with deep dependency chains. For our memory-bound, straight-line, small-tile kernel, the opposite is true.
+This is slightly counterintuitive, the conventional wisdom is "more warps = better latency hiding." That's true for compute-bound kernels with deep dependency chains. For our memory-bound, straight-line, small-tile kernel, the opposite is true.
 
 ### 5.5 Results
 
@@ -323,22 +323,22 @@ Correctness: 30/30 forward, 8/8 backward, gradcheck PASS. **V3 is bit-exact with
 | mqa_extreme | 14.8 µs | 15.2 µs | 0.97× (within noise) |
 | mha_no_gqa | 69.9 µs | 44.2 µs | **1.58×** |
 
-**The biggest V3 win is mha_no_gqa (1.58×)** — exactly the case where V2 fell back to V1-like grid (G=1). Autotune turning down num_warps from 4 to 2 specifically fixed the launch-overhead overhead that V2 inherited from V1 for that shape.
+**The biggest V3 win is mha_no_gqa (1.58×)**, exactly the case where V2 fell back to V1-like grid (G=1). Autotune turning down num_warps from 4 to 2 specifically fixed the launch-overhead overhead that V2 inherited from V1 for that shape.
 
 Bandwidth utilization on Qwen3-8B train: V2 1138 GB/s → V3 **1281 GB/s = 63% of A100 peak**.
 
-### 5.6 Backward timing — acknowledging the noise
+### 5.6 Backward timing, acknowledging the noise
 
 Backward V3 vs V2 results were mixed:
 
 | Shape | dtype | V2 | V3 | V3/V2 |
 |---|---|---|---|---|
-| qwen3_8b_train | bf16 | 80 µs | 66 µs | **1.21×** (target shape — clear win) |
+| qwen3_8b_train | bf16 | 80 µs | 66 µs | **1.21×** (target shape, clear win) |
 | qwen3_8b_short | bf16 | 110 µs | 150 µs | 0.74× (regression) |
 | mqa_extreme | bf16 | 157 µs | 266 µs | 0.59× (regression) |
 | mha_no_gqa | bf16 | 194 µs | 116 µs | **1.67×** |
 
-The regressions on qwen3_8b_short and mqa_extreme backward are likely benchmark noise — backward timing has higher variance because of autograd graph traversal cost, and these are 100-rep medians on operations that are only 100–200 µs. The target shape (qwen3_8b_train) shows a clean 1.21× improvement, and the worst-case shape (mha_no_gqa) shows a 1.67× improvement.
+The regressions on qwen3_8b_short and mqa_extreme backward are likely benchmark noise, backward timing has higher variance because of autograd graph traversal cost, and these are 100-rep medians on operations that are only 100–200 µs. The target shape (qwen3_8b_train) shows a clean 1.21× improvement, and the worst-case shape (mha_no_gqa) shows a 1.67× improvement.
 
 We don't believe these regressions are real bugs because:
 - Bit-exact correctness with V2 across all shapes
@@ -364,8 +364,8 @@ We don't believe these regressions are real bugs because:
 ### 6.2 Speedup ladder
 
 ```
-V1 → V2  : 2.56× (architectural — GQA-aligned head grouping)
-V2 → V3  : 1.14× (tuning — autotune num_warps)
+V1 → V2  : 2.56× (architectural, GQA-aligned head grouping)
+V2 → V3  : 1.14× (tuning, autotune num_warps)
 V1 → V3  : 2.89×
 PT → V3  : 7.13×
 UnslQK→V3: 2.78×
@@ -393,7 +393,7 @@ All three versions pass:
    - fp32: 4.8e-7 max abs diff (machine epsilon)
 2. **Backward correctness** via HF autograd in fp32, gradients cast to input dtype: all within tolerance.
 3. **`torch.autograd.gradcheck`** on fp64 with eps=1e-3, atol=1e-2 (Triton-fp32-internal-friendly tolerances).
-4. **Manual one-hot math check**: backward of one-hot dy at position (s=1, d=0) produces exactly `cos[1,0]` at the corresponding lo-half and exactly `-sin[1,0]` at the hi-half — confirming the negated-sin trick is mathematically correct.
+4. **Manual one-hot math check**: backward of one-hot dy at position (s=1, d=0) produces exactly `cos[1,0]` at the corresponding lo-half and exactly `-sin[1,0]` at the hi-half, confirming the negated-sin trick is mathematically correct.
 5. **Cross-version**: V1 ≡ V2 ≡ V3 bit-exact across bf16/fp16/fp32.
 
 ### 7.1 Forge's accuracy advantage at bf16
@@ -402,13 +402,13 @@ Liger and Unsloth both compute in input dtype throughout (`.to(sin_row.dtype)` w
 
 Forge accumulates in fp32 explicitly (`tl.load(...).to(tl.float32)`). When the result is stored back to bf16, the rounding error is at most 0.5 ULP at unit scale ≈ 0.004.
 
-**Measured: Forge vs HF-fp32-then-bf16 = 0.0 (bit-exact). Forge vs Liger/Unsloth in bf16 = 0.031 (≈4 bf16 ULPs).** That's not Forge being wrong — it's Forge being *more accurate than Liger and Unsloth* by ~2 bf16 ULPs. The FORGE_CONTEXT.md fp32-accumulation mandate is paying off.
+**Measured: Forge vs HF-fp32-then-bf16 = 0.0 (bit-exact). Forge vs Liger/Unsloth in bf16 = 0.031 (≈4 bf16 ULPs).** That's not Forge being wrong, it's Forge being *more accurate than Liger and Unsloth* by ~2 bf16 ULPs. The FORGE_CONTEXT.md fp32-accumulation mandate is paying off.
 
 ### 7.2 FSDP2 readiness
 
-All three versions use `ctx.save_for_backward(cos, sin)`. This is the FSDP2-safe idiom — `save_for_backward` participates in PyTorch's autograd metadata propagation, which FSDP2 inspects when sharding weights. Unsloth's `ctx.cos = cos` pattern bypasses this and would silently fail under FSDP2 sharding (`cos` not registered as a backward dependency, may be deallocated before backward runs on a different rank).
+All three versions use `ctx.save_for_backward(cos, sin)`. This is the FSDP2-safe idiom, `save_for_backward` participates in PyTorch's autograd metadata propagation, which FSDP2 inspects when sharding weights. Unsloth's `ctx.cos = cos` pattern bypasses this and would silently fail under FSDP2 sharding (`cos` not registered as a backward dependency, may be deallocated before backward runs on a different rank).
 
-This is one of the reasons the H15 FSDP2 smoke test should pass for our kernel out of the box — no kernel-side rework needed.
+This is one of the reasons the H15 FSDP2 smoke test should pass for our kernel out of the box, no kernel-side rework needed.
 
 ---
 
@@ -424,7 +424,7 @@ V3 autotune unanimously picked num_warps=2 across every shape. For small-tile ke
 
 ### 8.3 Architectural insight > micro-optimization
 
-V2 (2.56× win) was an algorithmic restructuring. V3 (1.14× win) was a tuning knob. The architecture-level changes give 2-3× type gains; tuning gives 5-15%. **Diminishing returns are real — know when to stop.**
+V2 (2.56× win) was an algorithmic restructuring. V3 (1.14× win) was a tuning knob. The architecture-level changes give 2-3× type gains; tuning gives 5-15%. **Diminishing returns are real, know when to stop.**
 
 ### 8.4 L2 cache is not magic, but Triton's launcher is real
 
@@ -441,19 +441,19 @@ Forge is bit-exact with HF computed in fp32 and quantized to bf16. Liger and Uns
 We're at 63% of A100 HBM peak on the target shape. The remaining 37% is:
 
 1. **Real arithmetic** (~10% of the gap). 6 FLOPs/output element of compute can't be eliminated.
-2. **Strided per-head memory access** (~10%). Per-head stride is `seq_len × head_dim × 2B = 512 KB` at our target, way beyond a cache line. Each row of the 2D Q tile becomes a separate transaction. To fix, we'd need to lay out Q in a different memory order (e.g., contiguous-across-heads-per-token) — but that breaks API compatibility with HF.
-3. **Launcher overhead** (~5–10%). Even at 65K programs, the Triton launcher dispatch costs a few microseconds. To eliminate, we'd need a persistent kernel — a major code change for marginal gain.
+2. **Strided per-head memory access** (~10%). Per-head stride is `seq_len × head_dim × 2B = 512 KB` at our target, way beyond a cache line. Each row of the 2D Q tile becomes a separate transaction. To fix, we'd need to lay out Q in a different memory order (e.g., contiguous-across-heads-per-token), but that breaks API compatibility with HF.
+3. **Launcher overhead** (~5–10%). Even at 65K programs, the Triton launcher dispatch costs a few microseconds. To eliminate, we'd need a persistent kernel, a major code change for marginal gain.
 4. **Suboptimal load granularity** (~5%). Each row of 64 bf16 elements = 128 bytes = one L1 cache line. The compiler is probably doing this right, but TMA on Hopper would let us prefetch tiles asynchronously. A100 doesn't have TMA.
 
 ### 9.1 What we'd do for V4+ (out of scope for hackathon)
 
 Ranked by potential ROI:
 
-- **Attention fusion** — fuse RoPE into the attention kernel (Flash-Attention-style). Would give 2-3× because we'd avoid the Q/K materialization. **CP4 research item.**
-- **Persistent kernel** — eliminate launcher overhead. Maybe 10-15% on small shapes, less on large.
-- **Hopper TMA** — `tl.async_copy` for cos/sin prefetch. Only A100→H100 jump; not relevant for our current target.
-- **In-place mode** — flag that writes back to input buffer. Saves alloc overhead, not HBM traffic. Maybe 5-10% but breaks autograd guarantees in some flows.
-- **Custom backward kernel** — separate the backward from the forward kernel binary so they can be autotuned independently with shape-specific assumptions. Probably 5-10% on backward.
+- **Attention fusion**, fuse RoPE into the attention kernel (Flash-Attention-style). Would give 2-3× because we'd avoid the Q/K materialization. **CP4 research item.**
+- **Persistent kernel**, eliminate launcher overhead. Maybe 10-15% on small shapes, less on large.
+- **Hopper TMA**, `tl.async_copy` for cos/sin prefetch. Only A100→H100 jump; not relevant for our current target.
+- **In-place mode**, flag that writes back to input buffer. Saves alloc overhead, not HBM traffic. Maybe 5-10% but breaks autograd guarantees in some flows.
+- **Custom backward kernel**, separate the backward from the forward kernel binary so they can be autotuned independently with shape-specific assumptions. Probably 5-10% on backward.
 
 None of these are worth touching during the hackathon. V3 is the right place to stop.
 
@@ -467,18 +467,18 @@ Trivial. PyTorch's `apply_rotary_pos_emb` materializes three intermediate tensor
 
 ### 10.2 vs Liger (3.24× faster on Qwen3-8B target)
 
-Liger's grid `(b·s,)` launches only `b·s` programs — for Qwen3-8B that's 4096. Their kernel does *all* heads (Q + K) per program with a 2D tile of shape `(pad_n_q + pad_n_kv, head_dim/2)`. For Qwen3-8B that's a 40×64 fp32 tile = ~10 KB per program — significant register pressure. With only 4K programs and large per-program work, A100's 108 SMs are under-utilized (about 38 programs per SM with significant tile size).
+Liger's grid `(b·s,)` launches only `b·s` programs, for Qwen3-8B that's 4096. Their kernel does *all* heads (Q + K) per program with a 2D tile of shape `(pad_n_q + pad_n_kv, head_dim/2)`. For Qwen3-8B that's a 40×64 fp32 tile = ~10 KB per program, significant register pressure. With only 4K programs and large per-program work, A100's 108 SMs are under-utilized (about 38 programs per SM with significant tile size).
 
 V3 uses 32K programs (b·s × n_kv) with G=4 head tiles. Better SM occupancy, smaller register footprint, similar per-token cos/sin reuse.
 
 ### 10.3 vs Unsloth default (3.72× faster)
 
-Unsloth's default `fast_rope_embedding` runs `Fast_RoPE_Embedding.apply()` twice — once for Q, once for K. Two kernel launches per call. We do one.
+Unsloth's default `fast_rope_embedding` runs `Fast_RoPE_Embedding.apply()` twice, once for Q, once for K. Two kernel launches per call. We do one.
 
 ### 10.4 vs Unsloth-fused-QK (2.78× faster)
 
 This is the most architecturally similar baseline. Both use `(b·s, ...)` grids and handle Q+K in one launch. The differences:
-- **GQA mask**: Unsloth uses `if head_position < n_heads_K` — runtime branch. V3 has no GQA branch (G grouping is implicit).
+- **GQA mask**: Unsloth uses `if head_position < n_heads_K`, runtime branch. V3 has no GQA branch (G grouping is implicit).
 - **Load balance**: Unsloth's `(b·s, n_q) = 4096 × 32 = 131K programs`, of which `n_q - n_kv = 24` per token do Q-only work (75% of programs underutilized). V3's 32K programs all do identical work.
 - **num_warps**: Unsloth uses `calculate_settings(head_dim) = num_warps=8` for our head_dim=128. V3 autotuned to num_warps=2.
 
@@ -500,22 +500,22 @@ V3's design was derived from the *math* and the *general structure of GQA*, not 
 ## 12. Artifacts
 
 ### 12.1 Code
-- `kernels/rope/forge_rope_v1.py` — V1 kernel (Unsloth-QK shape, no head grouping, hardcoded num_warps=4)
-- `kernels/rope/forge_rope_v2.py` — V2 kernel (GQA-aligned head grouping, hardcoded num_warps=4)
-- **`kernels/rope/forge_rope_v3.py`** — **V3 kernel (V2 + Triton autotune). Shipping kernel.**
+- `kernels/rope/forge_rope_v1.py`, V1 kernel (Unsloth-QK shape, no head grouping, hardcoded num_warps=4)
+- `kernels/rope/forge_rope_v2.py`, V2 kernel (GQA-aligned head grouping, hardcoded num_warps=4)
+- **`kernels/rope/forge_rope_v3.py`**, **V3 kernel (V2 + Triton autotune). Shipping kernel.**
 
 ### 12.2 Tests / benchmarks
-- `kernels/rope/tests/test_v1.py` — V1 correctness + light timing → `tests/results/v1_results.json`, `v1_summary.md`
-- `kernels/rope/benchmarks/bench_v2.py` — V2 + V1 + baselines comparison → `benchmarks/results/v2_results.json`, `v2_summary.md`
-- `kernels/rope/benchmarks/bench_v3.py` — V3 + V2 + V1 + baselines comparison → `benchmarks/results/v3_results.json`, `v3_summary.md`
+- `kernels/rope/tests/test_v1.py`, V1 correctness + light timing → `tests/results/v1_results.json`, `v1_summary.md`
+- `kernels/rope/benchmarks/bench_v2.py`, V2 + V1 + baselines comparison → `benchmarks/results/v2_results.json`, `v2_summary.md`
+- `kernels/rope/benchmarks/bench_v3.py`, V3 + V2 + V1 + baselines comparison → `benchmarks/results/v3_results.json`, `v3_summary.md`
 
 ### 12.3 Reference reading
-- `kernels/rope/rope_knowledge_base/` — vendored sources from HF, Unsloth, Liger, Megatron-LM, TransformerEngine, TorchTitan with per-source `SOURCE.md` provenance
-- `kernels/rope/baselines/` — self-contained, runnable Liger and Unsloth vendored kernels
+- `kernels/rope/rope_knowledge_base/`, vendored sources from HF, Unsloth, Liger, Megatron-LM, TransformerEngine, TorchTitan with per-source `SOURCE.md` provenance
+- `kernels/rope/baselines/`, self-contained, runnable Liger and Unsloth vendored kernels
 
 ### 12.4 Design docs
-- `kernels/rope/docs/comparative_analysis.md` — Phase-2 comparative study (math contract, 10-dimension decision matrix, original pseudocode)
-- `kernels/rope/docs/evolution_report.md` — **this document**
+- `kernels/rope/docs/comparative_analysis.md`, Phase-2 comparative study (math contract, 10-dimension decision matrix, original pseudocode)
+- `kernels/rope/docs/evolution_report.md`, **this document**
 
 ---
 
@@ -541,7 +541,7 @@ For shapes where `n_q % n_kv != 0` (none in CP1 scope), fall back to V1.
 
 1. **`forge.patch` integration** (H10, Day 2 morning): wire V3 into the Qwen3 patching path. The kernel API matches HF's call signature exactly.
 2. **Register in `forge.kernels.registry`** (H7 scaffold): `@register_kernel("rope")` for the registry-based A/B test infra.
-3. **Gemma compatibility check** (H6/H8): V3 already handles configurable `base` (it's the caller's job — kernel takes cos/sin as inputs). Just verify the precompute on the Gemma side uses the right base.
+3. **Gemma compatibility check** (H6/H8): V3 already handles configurable `base` (it's the caller's job, kernel takes cos/sin as inputs). Just verify the precompute on the Gemma side uses the right base.
 4. **FSDP2 smoke test** (H15, Day 2 afternoon): our `save_for_backward(cos, sin)` should pass cleanly. If it doesn't, the bug is in the patching layer, not the kernel.
 
 ### 13.3 Post-hackathon
@@ -560,8 +560,8 @@ The V1 → V2 → V3 progression turned out to be a clean illustration of three 
 - **V2 → V3 was a tuning knob** (`@triton.autotune`). 1.14× gain. Trivial code change, but the autotune's universal preference for num_warps=2 was itself a finding worth keeping.
 - **V3 → V4** (not done) **would be an algorithmic redesign** (attention fusion). The gains are there but the scope is much bigger.
 
-The 7.1× speedup vs PyTorch on the target shape is real. **The 2.78× speedup vs the best known fused-RoPE baseline (Unsloth's fused QK kernel)** is what makes V3 genuinely novel — neither Liger nor Unsloth do GQA-aligned head grouping; both either over-parallelize (Unsloth, 131K programs of which 75% are load-imbalanced) or under-parallelize (Liger, 4K programs with large register tiles).
+The 7.1× speedup vs PyTorch on the target shape is real. **The 2.78× speedup vs the best known fused-RoPE baseline (Unsloth's fused QK kernel)** is what makes V3 genuinely novel, neither Liger nor Unsloth do GQA-aligned head grouping; both either over-parallelize (Unsloth, 131K programs of which 75% are load-imbalanced) or under-parallelize (Liger, 4K programs with large register tiles).
 
 The original Forge design doc (`docs/comparative_analysis.md`) said the goal was to "match Unsloth-equivalent perf with a cleaner modular API." V3 ships at **2.78× Unsloth**, with **fp32 accumulation accuracy advantage**, **FSDP2-safe** by construction, and with the **kernel-registry, A/B-bench, gradcheck infra** Forge differentiates on. That's a solid H2 deliverable.
 
-The biggest single takeaway, both for this kernel and for the other Forge kernels P1-P5 are building today, is in §8.1: **launch overhead dominates for small-tile memory-bound kernels — start coarse, not granular.** That insight came out of being wrong about V2's predicted gain by a factor of 20 (predicted 5–15%, got 256%). The data taught us what theory didn't.
+The biggest single takeaway, both for this kernel and for the other Forge kernels P1-P5 are building today, is in §8.1: **launch overhead dominates for small-tile memory-bound kernels, start coarse, not granular.** That insight came out of being wrong about V2's predicted gain by a factor of 20 (predicted 5–15%, got 256%). The data taught us what theory didn't.

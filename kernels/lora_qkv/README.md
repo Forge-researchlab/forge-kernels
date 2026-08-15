@@ -1,6 +1,6 @@
 # LoRA QKV Fused Kernel
 
-Research project to build a high-performance Triton kernel that fuses the LoRA forward pass for multi-head attention QKV projections — queries, keys, and values with low-rank adapters applied inline, eliminating redundant input reads and intermediate materializations.
+Research project to build a high-performance Triton kernel that fuses the LoRA forward pass for multi-head attention QKV projections, queries, keys, and values with low-rank adapters applied inline, eliminating redundant input reads and intermediate materializations.
 
 ## The Problem
 
@@ -55,7 +55,7 @@ lora_qkv/
 | **Minor upgrade** | Tuning / bugfix within same approach | `v1_2` = autotuned tile sizes for v1 |
 | **File** | `lora_qkv_kernel_v{N}.py` or `_v{N}_{M}.py` | `experiments/v1/lora_qkv_kernel_v1.py` |
 
-**Rule**: never modify a previous version — copy forward and iterate. Every file is a snapshot.
+**Rule**: never modify a previous version, copy forward and iterate. Every file is a snapshot.
 
 ## Quick Start
 
@@ -107,7 +107,7 @@ python benchmarks/bench_lora_qkv.py \
 | Aspect | LoRA MLP | LoRA QKV |
 |--------|----------|----------|
 | Projections | 3 (gate, up, down) | 3 (Q, K, V) |
-| Non-linearity | SwiGLU between gate/up and down | None — projections are independent |
+| Non-linearity | SwiGLU between gate/up and down | None, projections are independent |
 | Output coupling | gate × up elementwise | Q, K, V are independent outputs |
 | GQA | N/A | K, V may have different dimensions |
 | Fusion opportunity | Activation barrier between gate/up and down | Can fuse all 3 matmuls (no barrier) |

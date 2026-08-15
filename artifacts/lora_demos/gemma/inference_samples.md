@@ -1,6 +1,6 @@
 # Forge LoRA demo — held-out inference samples
 
-Model: `google/gemma-2-2b` + LoRA adapter from `lora_demo/lora_adapter`
+Model: `google/gemma-2-2b` + LoRA adapter from `lora_demos/gemma/lora_adapter`
 
 All prompts are HELD OUT — they did **not** appear in training. Greedy decoding (`do_sample=False`), 32 new tokens.
 
