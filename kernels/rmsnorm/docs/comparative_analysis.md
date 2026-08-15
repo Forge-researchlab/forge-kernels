@@ -1,4 +1,4 @@
-# ForgeRMSNorm — Comparative Analysis
+# ForgeRMSNorm, Comparative Analysis
 
 Phase 2 (Comparative Study) deliverable: a per-dimension tradeoff table across
 Liger, Unsloth, HF, Apex, and TransformerEngine, with Forge's locked decisions
@@ -15,11 +15,11 @@ and rationale. The raw upstream files live in `../rmsnorm_knowledge_base/0X_*/`.
 | 5 | NVIDIA TransformerEngine | Apache 2.0 | `rmsnorm_knowledge_base/05_transformer_engine/` (study only) |
 
 (Apex and TE are CUDA-only; we cite them as perf references but don't run them
-in the benchmark suite — would require installing Apex/TE which adds
+in the benchmark suite, would require installing Apex/TE which adds
 non-trivial setup. Their numbers in the comparison below come from each
 project's published benchmarks.)
 
-## §2 Tradeoff table — 8 dimensions
+## §2 Tradeoff table, 8 dimensions
 
 ### D1: Grid shape (forward)
 
@@ -28,7 +28,7 @@ project's published benchmarks.)
 | Liger | `(n_rows,)` if `BLOCK_SIZE>256 or n_rows<32K`; else `(ceil(n_rows/16), 1)` | Dynamic dual-kernel selection |
 | Unsloth | `(n_rows,)` always | Simpler |
 | Apex / TE | CUDA blocks per `n_rows`, threads tile `n_cols` | Production CUDA pattern |
-| **Forge v2/v3** | `(n_rows,)` always | Liger's single-row path. We skip the block-row dual kernel — not worth the complexity at our hidden-size regime (H≥2304 for Gemma, H≥4096 for Qwen3/Llama). |
+| **Forge v2/v3** | `(n_rows,)` always | Liger's single-row path. We skip the block-row dual kernel, not worth the complexity at our hidden-size regime (H≥2304 for Gemma, H≥4096 for Qwen3/Llama). |
 
 ### D2: Casting mode (where fp32 ends)
 
@@ -48,7 +48,7 @@ constexpr rather than a separate kernel. We adopt it.
 | Source | Strategy |
 |---|---|
 | Liger | `tl.constexpr offset` parameter inside the kernel, fused into the existing fp32 weight load |
-| Unsloth | Separate kernel `_gemma_rms_layernorm_forward` (no shared parameter — implicit `(W + 1.0)` in backward) |
+| Unsloth | Separate kernel `_gemma_rms_layernorm_forward` (no shared parameter, implicit `(W + 1.0)` in backward) |
 | TransformerEngine | `zero_centered_gamma=True` flag on the host, forwarded to a CUDA kernel constexpr-like switch |
 | **Forge v2/v3** | `OFFSET: tl.constexpr` (Liger pattern) |
 
@@ -68,23 +68,23 @@ LoRA-safe rule that closures must close over `module.weight` directly).
 | **Forge v2/v3** | SM-proportional partials + Python `partial.sum(0)`. Matches Liger's pattern. `num_programs = min(n_rows, sm_count)` gives a 2.3× smaller buffer than v1's `ceil(n_rows / 16)`. |
 
 We considered atomic `tl.atomic_add` to `dW` directly (no partials needed) and
-rejected it — see `kernels/layernorm/context.md §3` for the team-locked
+rejected it, see `kernels/layernorm/context.md §3` for the team-locked
 decision: SM-count atomic writes to `[H]` serialize on H4096-sized vectors.
 
 ### D5: Saved tensors
 
 | Source | Saved |
 |---|---|
-| Liger | `(X, W, rstd)` — rstd in fp32 per row |
-| Unsloth | `(X, W, rstd)` — same shape |
-| Apex `memory_efficient` | `(Y, W)` — recompute normalization in backward |
-| **Forge v2/v3** | `(X, W, rstd)`. Apex's recompute trick saves H·4 B/row of activation memory but adds one extra rsqrt + multiply in backward; deferred — useful for LoRA path later. |
+| Liger | `(X, W, rstd)`, rstd in fp32 per row |
+| Unsloth | `(X, W, rstd)`, same shape |
+| Apex `memory_efficient` | `(Y, W)`, recompute normalization in backward |
+| **Forge v2/v3** | `(X, W, rstd)`. Apex's recompute trick saves H·4 B/row of activation memory but adds one extra rsqrt + multiply in backward; deferred, useful for LoRA path later. |
 
 ### D6: DTensor / FSDP support
 
 | Source | Strategy |
 |---|---|
-| Liger | `if isinstance(X, DTensor): X = X.full_tensor()` — gather to local before kernel |
+| Liger | `if isinstance(X, DTensor): X = X.full_tensor()`, gather to local before kernel |
 | Unsloth | No DTensor handling |
 | **Forge v2/v3** | No DTensor handling (out of scope for hackathon). Patching closures close over `module.weight` directly; FSDP2 weight-update semantics work via that, but native DTensor inputs are deferred. We do import a `_DTensor` sentinel in `baselines/liger/rms_norm.py` so the vendored code remains import-safe across torch 2.4-2.5 path differences. |
 
@@ -92,7 +92,7 @@ decision: SM-count atomic writes to `[H]` serialize on H4096-sized vectors.
 
 | Source | num_warps picker |
 |---|---|
-| Liger | `num_warps = min(max(BLOCK_SIZE // 256, 1), 16)` — heuristic on block size |
+| Liger | `num_warps = min(max(BLOCK_SIZE // 256, 1), 16)`, heuristic on block size |
 | Unsloth | Hardcoded buckets: 4 for ≥512, 8 for ≥2048, 16 for ≥8192, 32 for ≥32768 |
 | **Forge v2** | Same buckets as Unsloth (host-side `_calculate_settings`) |
 | **Forge v3** | `@triton.autotune` over `num_warps ∈ {4, 8, 16} × num_stages ∈ {2, 3}` keyed on `(n_cols, ACC_DTYPE)` |
@@ -105,7 +105,7 @@ subsequent call. Production training will see the cache hit ratio approach 1.
 | Source | Strategy |
 |---|---|
 | Liger | `in_place=True` default; Gemma2 path uses `in_place=False` because its sequential RMSNorm + residual pattern needs `dY` preserved |
-| Unsloth | Conditional on `GEMMA` flag — in-place when `False`, separate when `True` |
+| Unsloth | Conditional on `GEMMA` flag, in-place when `False`, separate when `True` |
 | **Forge v2/v3** | Always allocate fresh `dX`. Defers the in-place optimization until the LoRA path is wired (where the same "preserve dY for residual" pitfall applies). |
 
 ## §3 Forge's locked decisions
@@ -124,9 +124,9 @@ subsequent call. Production training will see the cache hit ratio approach 1.
 ## §4 What Forge does NOT take from Liger
 
 - The **block-row dual kernel** (`_block_rms_norm_forward_kernel`, BLOCK_ROW=16).
-  Unnecessary complexity for our shape regime — we never hit the small-H/large-n_rows
+  Unnecessary complexity for our shape regime, we never hit the small-H/large-n_rows
   case that path is designed for.
-- The **DTensor `.full_tensor()` branch** — out of scope.
+- The **DTensor `.full_tensor()` branch**, out of scope.
 - The **`in_place=True` backward**. Liger sets it to False for Gemma2 anyway;
   our always-out-of-place backward avoids the conditional.
 
@@ -135,9 +135,9 @@ subsequent call. Production training will see the cache hit ratio approach 1.
 - **In-place backward with explicit "needs residual" override.** When is the
   memory saving worth the API complexity? Probably during LoRA training where
   activation memory is the bottleneck.
-- **Dual single-row + block-row kernel** — does the block-row path actually win
+- **Dual single-row + block-row kernel**, does the block-row path actually win
   on small-H Gemma shapes (e.g. Gemma-3 270M)? Worth measuring before adopting.
-- **FP8-aware mode** — TransformerEngine's pattern. CP4 territory.
-- **Welford's algorithm vs the current `sum(x²)/N` reduction** — Welford
+- **FP8-aware mode**, TransformerEngine's pattern. CP4 territory.
+- **Welford's algorithm vs the current `sum(x²)/N` reduction**, Welford
   improves numerical stability at very long H. We're far from where it matters
   (H≤16384 in production), but worth a footnote.

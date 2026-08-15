@@ -1,4 +1,4 @@
-# LayerNorm — Context
+# LayerNorm, Context
 
 ## What this kernel does
 
@@ -14,8 +14,8 @@ y_i      = (x_i - mean) * rstd * w_i + b_i
 
 There are two Triton variants in `layernorm_kernel.py`:
 
-- `ForgeLayerNormLiger` — full backward, computes `dX`, `dW`, `dB`
-- `ForgeLayerNormUnsloth` — `dX`-only backward, written **in-place** into the
+- `ForgeLayerNormLiger`, full backward, computes `dX`, `dW`, `dB`
+- `ForgeLayerNormUnsloth`, `dX`-only backward, written **in-place** into the
   upstream `dY` buffer; returns `None` for `dW, dB`
 
 Both are wrapped in a `torch.autograd.Function` and a `nn.Module` shim and
@@ -26,7 +26,7 @@ match `F.layer_norm` for the forward pass.
 PyTorch's eager `F.layer_norm` decomposes into ~10+ small CUDA kernels: one
 per reduction (mean, var), an `affine` multiply, an `add` for bias, and so on.
 Each kernel reads `X` from HBM and writes a temporary back. LayerNorm is
-**bandwidth-bound** — its math is trivial, the cost is moving `X` and `Y` in
+**bandwidth-bound**, its math is trivial, the cost is moving `X` and `Y` in
 and out of HBM. The Triton kernels here fuse the work and stop paying those
 round trips.
 
@@ -38,8 +38,8 @@ Concretely:
 
 2. **Welford-free reduction.** We deliberately don't run a two-pass / Welford
    reduction. `var = mean(x^2) - mean(x)^2` is numerically dicey at low
-   precision, so we do `(x - mean)^2` after the mean reduction — still one
-   pass over SRAM-resident data — and keep the partial sums in fp32 even when
+   precision, so we do `(x - mean)^2` after the mean reduction, still one
+   pass over SRAM-resident data, and keep the partial sums in fp32 even when
    `X` is bf16/fp16. This is the cheap, correct path at LN's typical scale.
 
 3. **Partial-accumulator backward (Liger).** Computing `dW = sum_rows dy * x_hat`
@@ -61,7 +61,7 @@ Concretely:
    block up to the next power of 2 (capped at 65536) and picks `num_warps` so
    the warp count scales with block size (`min(max(BLOCK // 256, 1), 8)`).
    Power-of-2 alignment matters: at `H=4097`, BLOCK becomes 8192 and ~50% of
-   every thread's work is masked-out — `test_alignment_impact.py` exposes
+   every thread's work is masked-out, `test_alignment_impact.py` exposes
    this diagnostically.
 
 6. **fp32 reductions, native-dtype tensor ops.** All sums/reductions happen in
@@ -69,14 +69,14 @@ Concretely:
    `Y`, `dX`. This is what keeps the bf16 path within a few ULP of eager
    `F.layer_norm`.
 
-## Two variants — when to use which
+## Two variants, when to use which
 
 | Variant   | dX | dW | dB | Peak VRAM (bwd) | Use case |
 |-----------|----|----|----|-----------------|----------|
 | Liger     | ✓  | ✓  | ✓  | higher          | Training W, B (default LN behavior) |
 | Unsloth   | ✓  | ✗  | ✗  | lower (in-place)| Frozen LN (e.g. LoRA / inference / norms locked) |
 
-**Important contract — Unsloth returns `None` for `dW, dB`.** If you wire
+**Important contract, Unsloth returns `None` for `dW, dB`.** If you wire
 `ForgeLayerNormUnsloth` into a module whose `weight` and `bias` are
 `requires_grad=True`, those parameters will silently never update. The test
 suite enforces this contract explicitly via
@@ -84,8 +84,8 @@ suite enforces this contract explicitly via
 
 ## How we want to test it
 
-Goal: every claim the kernel makes — correctness, gradient correctness, perf,
-memory — has a test that surfaces a regression. Tests are split into hard
+Goal: every claim the kernel makes, correctness, gradient correctness, perf,
+memory, has a test that surfaces a regression. Tests are split into hard
 gates (default `pytest`) and soft perf reports (`pytest -m bench`).
 
 ### Test matrix
@@ -100,7 +100,7 @@ gates (default `pytest`) and soft perf reports (`pytest -m bench`).
 | Latency        | `test_perf_time.py`           | fwd / fwd+bwd ms for eager / `torch.compile` / Liger / Unsloth on design shapes. | soft (report) |
 | VRAM           | `test_perf_memory.py`         | Peak MB for fwd, fwd+bwd. Confirms Unsloth's in-place savings vs Liger ≈ `M·H·elem_size`. | soft |
 | Bandwidth      | `test_bandwidth.py`           | Achieved GB/s and % of A100 40GB peak (1555 GB/s) for fwd and bwd. | soft |
-| Fusion         | `test_launch_count.py`        | CUDA-event count via `torch.profiler` — eager ~10+, Triton ~2. | soft |
+| Fusion         | `test_launch_count.py`        | CUDA-event count via `torch.profiler`, eager ~10+, Triton ~2. | soft |
 | Alignment      | `test_alignment_impact.py`    | Diagnostic: fwd time for H ∈ {4096, 4097, 8192, 8193}; shows masked-element waste. | soft |
 
 ### Tolerances
@@ -113,7 +113,7 @@ TOL_FP16 = dict(rtol=1e-3, atol=1e-3)
 TOL_FP32 = dict(rtol=1e-5, atol=1e-5)
 ```
 
-bf16 LayerNorm reductions are noisier than other ops — `rtol=1e-5` (the value
+bf16 LayerNorm reductions are noisier than other ops, `rtol=1e-5` (the value
 suggested by other kernel docstrings) is too tight at `(8, 2048, 4096)`. `1e-2`
 is the empirically validated floor against `F.layer_norm`. Gradcheck stays
 strict at fp64.
@@ -130,7 +130,7 @@ non-negotiable; perf numbers are diagnostic.
 On an A100:
 
 ```bash
-# Default — correctness, gradcheck, edge cases, variant comparison
+# Default, correctness, gradcheck, edge cases, variant comparison
 pytest tests/test_kernels/layernorm/ -v
 
 # Perf, memory, bandwidth, launch count, alignment tables
@@ -154,12 +154,12 @@ if you want to run elsewhere (numbers will be device-dependent).
   `triton.autotune` sweep over `BLOCK_SIZE`, `num_warps`, `num_stages` would
   squeeze more out, especially for non-power-of-2 H.
 - **Unsloth dW/dB contract is silent.** Returning `None` for `dW, dB` when the
-  user passes `requires_grad=True` doesn't raise — the test contract catches
+  user passes `requires_grad=True` doesn't raise, the test contract catches
   this, but the kernel itself doesn't. Future: warn once when called with a
   trainable W, B.
 - **Backward dY clone in tests.** Unsloth bwd overwrites `dY` in place, so any
   test that re-uses `dY` across calls must `.clone()` first. This is a kernel
-  contract, not a bug — but easy to trip on.
+  contract, not a bug, but easy to trip on.
 - **Liger backward partial buffer size.** `num_programs × H × 4 bytes` of fp32
-  partials. At `H=4096` and 108 SMs on A100 that's ~1.7 MB — negligible. At
+  partials. At `H=4096` and 108 SMs on A100 that's ~1.7 MB, negligible. At
   much larger H it would matter.

@@ -3,7 +3,7 @@
 Loads Qwen2.5-0.5B on a single GPU. For each held-out English prompt:
   * Generate from BASE only (no adapter, no forge.patch).
   * Generate from BASE + trained LoRA adapter.
-Writes results to artifacts/lora_demo_qwen/inference_samples.md.
+Writes results to artifacts/lora_demos/qwen/inference_samples.md.
 
 Run after training completes:
     HF_HOME=/workspace/.hf-cache python forge/demos/run_inference_qwen.py
@@ -27,7 +27,7 @@ from pirate_dataset import HELD_OUT_PROMPTS, build_prompt
 
 MODEL_ID = "Qwen/Qwen2.5-0.5B"
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ARTIFACTS_DIR = REPO_ROOT / "artifacts" / "lora_demo_qwen"
+ARTIFACTS_DIR = REPO_ROOT / "artifacts" / "lora_demos" / "qwen"
 ADAPTER_DIR = ARTIFACTS_DIR / "lora_adapter"
 OUT_PATH = ARTIFACTS_DIR / "inference_samples.md"
 

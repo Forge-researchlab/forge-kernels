@@ -7,10 +7,10 @@
 
 ## What each column means
 
-- **Weights (MB):** persistent storage for the projection tensors. Training paths store `W + A + B` for gate/up/down (identical across Unsloth, v3, v5, v5_upgrade_1). Inference stores only the merged `W_eff` tensors — no separate A/B.
+- **Weights (MB):** persistent storage for the projection tensors. Training paths store `W + A + B` for gate/up/down (identical across Unsloth, v3, v5, v5_upgrade_1). Inference stores only the merged `W_eff` tensors, no separate A/B.
 - **Fwd (MB):** peak `memory_allocated` delta during the forward call. Captures temporary buffers (e.g. v5's packed `W_mega`, the `[M, 2*I + 2*r]` mega-matmul output).
 - **Fwd+Bwd (MB):** peak delta across forward + backward. Includes the temporaries above plus everything backward needs simultaneously (`DW`, transposed `A/B`, all six grad buffers, `dX`, and so on).
-- **Resident after fwd (MB):** what stays allocated right after the forward returns — the output tensor plus any `save_for_backward` tensors. This is the activation footprint that backward has to live with.
+- **Resident after fwd (MB):** what stays allocated right after the forward returns, the output tensor plus any `save_for_backward` tensors. This is the activation footprint that backward has to live with.
 
 ## LLaMA-8B production (batch=4, seq=2048, r=16, bf16)
 
@@ -119,13 +119,13 @@
 - `W_mega = cat(W_gate, W_up, A_gate, A_up)` allocates a fresh `[2*I + 2*r, H]` tensor every call (~224 MiB at LLaMA-8B).
 - `W_down_packed = cat(W_down, A_down)` allocates another `[H + r, I]` (~118 MiB).
 - The mega-matmul output `result = X @ W_mega.t()` is `[M, 2*I + 2*r]` (~448 MiB at M=8192) and stays alive (via the non-contiguous slice views `e_base`, `g_base`, `xa_gate`, `xa_up`) until the Python scope of `_v5_forward_impl` exits.
-- The Triton epilogue still allocates contiguous `e_full`, `g_full` (2 × ~224 MiB) for backward, and `h` (~224 MiB) — those don't disappear when `result` does.
+- The Triton epilogue still allocates contiguous `e_full`, `g_full` (2 × ~224 MiB) for backward, and `h` (~224 MiB), those don't disappear when `result` does.
 
-Add it up: ~224 (W_mega) + ~118 (W_down_packed) + ~448 (result) + ~672 (h, e_full, g_full) + 64 (output) + 64 (contig copy for addmm_) ≈ **1590 MiB peak** — within rounding of the measured 1585.4 MB. Compare against v3, which doesn't pack: ~224·5 (e_base, g_base, h, e_full, g_full) + 64 (output) ≈ **1184 MiB** — exact match against measured 1184.8 MB.
+Add it up: ~224 (W_mega) + ~118 (W_down_packed) + ~448 (result) + ~672 (h, e_full, g_full) + 64 (output) + 64 (contig copy for addmm_) ≈ **1590 MiB peak**, within rounding of the measured 1585.4 MB. Compare against v3, which doesn't pack: ~224·5 (e_base, g_base, h, e_full, g_full) + 64 (output) ≈ **1184 MiB**, exact match against measured 1184.8 MB.
 
 **`v5_upgrade_1` saves ~173 MB vs `v5`** at LLaMA-8B production (1412.2 vs 1585.4). The win comes from dropping the down packing (no `W_down_packed`, no `down_result`, no `.contiguous()` copy). It still pays the gate+up mega-GEMM memory tax.
 
-**Activation footprint (the thing that actually limits batch size during training) is identical at 512 MiB for all four training paths** at LLaMA-8B production: `e + g + output = 224 + 224 + 64` MiB. They all save the same tensors for backward; the differences are purely in transient forward-time buffers. So if you're trying to fit a bigger batch, picking v3 over v5 buys you headroom only during the forward call — peak `fwd+bwd` is what matters across the whole step, and there v3 wins by ~400 MB vs v5 at LLaMA-8B production.
+**Activation footprint (the thing that actually limits batch size during training) is identical at 512 MiB for all four training paths** at LLaMA-8B production: `e + g + output = 224 + 224 + 64` MiB. They all save the same tensors for backward; the differences are purely in transient forward-time buffers. So if you're trying to fit a bigger batch, picking v3 over v5 buys you headroom only during the forward call, peak `fwd+bwd` is what matters across the whole step, and there v3 wins by ~400 MB vs v5 at LLaMA-8B production.
 
 **Sanity check on the math** (bf16, M=8192, H=4096, I=14336, r=16):
 

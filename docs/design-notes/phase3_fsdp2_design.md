@@ -1,11 +1,11 @@
-# Phase 3 — FSDP2 + LoRA + Gemma 2 (Resume Doc)
+# Phase 3, FSDP2 + LoRA + Gemma 2 (Resume Doc)
 
 **Audience:** the next Claude session running on a 2-GPU machine.
 **Status when this doc was written:** Phases 1 + 2 complete on a 1-GPU box; FSDP2 work intentionally deferred until 2 GPUs were available.
 **Date written:** 2026-05-24 (Forge hackathon weekend, Day 2 afternoon)
 **Owner:** Xhitij (Meesho, Forge GPU kernel team)
 
-> **How to start when you read this:** the user will say something like *"resume Phase 3"* or *"go ahead with FSDP2"*. Read this whole doc first, then jump to §9 (the action plan). You do not need to re-derive any of the design choices — they are locked.
+> **How to start when you read this:** the user will say something like *"resume Phase 3"* or *"go ahead with FSDP2"*. Read this whole doc first, then jump to §9 (the action plan). You do not need to re-derive any of the design choices, they are locked.
 
 ---
 
@@ -13,50 +13,50 @@
 
 Build `forge/tests/verify_fsdp2_lora_gemma.py` and run it under `torchrun --nproc-per-node=2`. It must show that **PEFT-wrapped Gemma 2 + `forge.patch(kernels=["lora_qkv","lora_mlp"])` works correctly when each `Gemma2DecoderLayer` is wrapped with FSDP2's `fully_shard()`**, in both an inference path (forward + greedy generate) and a realistic training step (Adam, bf16 mixed-precision, gradient accumulation, 5 outer steps). Compare against a single-GPU reference baked by rank 0.
 
-The H15 doc — `/workspace/kernel-POCs/context/forge_hackathon_site/HACKATHON_SMOKE_TEST.md` — defines the *minimum* smoke test (RMSNorm + Linear only). Xhitij has explicitly chosen to skip the minimum and run the full Gemma + LoRA scenario instead. Don't re-debate scope.
+The H15 doc, `/workspace/kernel-POCs/context/forge_hackathon_site/HACKATHON_SMOKE_TEST.md`, defines the *minimum* smoke test (RMSNorm + Linear only). Xhitij has explicitly chosen to skip the minimum and run the full Gemma + LoRA scenario instead. Don't re-debate scope.
 
 ---
 
 ## 2. What's already done (do NOT re-do this work)
 
-### Phase 1 — LoRA kernels parity (single-GPU)
+### Phase 1, LoRA kernels parity (single-GPU)
 
 **Wired into `forge.kernels`:**
-- `forge/forge/kernels/lora_mlp.py` — additively exports v6 (`LoRAMLPv6`, `lora_mlp_v6`, `LoRAMLPv6Module`, `stack_lora_a`) on top of the existing v3 exports.
-- `forge/forge/kernels/lora_qkv.py` — additively exports v4 (`LoRAQKVv4Function`, `lora_qkv_v4`, `pack_weights_backward`, `pack_lora_a`) on top of v3.
+- `forge/forge/kernels/lora_mlp.py`, additively exports v6 (`LoRAMLPv6`, `lora_mlp_v6`, `LoRAMLPv6Module`, `stack_lora_a`) on top of the existing v3 exports.
+- `forge/forge/kernels/lora_qkv.py`, additively exports v4 (`LoRAQKVv4Function`, `lora_qkv_v4`, `pack_weights_backward`, `pack_lora_a`) on top of v3.
 
 **Tests, all GREEN:**
-- `forge/tests/test_lora_qkv.py` — 12/12 PASS (forward + 7 gradient cases)
-- `forge/tests/test_lora_mlp.py` — 8/8 PASS
-- `forge/tests/test_lora_convergence.py` — 2/2 PASS (50-step Adam parity, **subprocess-isolated** to dodge a sys.path collision between the two kernel directories — see §11)
+- `forge/tests/test_lora_qkv.py`, 12/12 PASS (forward + 7 gradient cases)
+- `forge/tests/test_lora_mlp.py`, 8/8 PASS
+- `forge/tests/test_lora_convergence.py`, 2/2 PASS (50-step Adam parity, **subprocess-isolated** to dodge a sys.path collision between the two kernel directories, see §11)
 
-### Phase 2 — PEFT + Gemma 2 patching integration
+### Phase 2, PEFT + Gemma 2 patching integration
 
 **Edits:**
-- `forge/forge/patching/kernels/lora.py` — two factory upgrades:
+- `forge/forge/patching/kernels/lora.py`, two factory upgrades:
   - `make_lora_mlp_forward`: detects activation via a new `_detect_mlp_activation(module)` helper.
     - SiLU (Qwen 2/3 default) → existing `LoRAMLPv3` fused path
-    - GeGLU (`gelu_pytorch_tanh` / `gelu` — Gemma 2) → thin layered path: calls `module.gate_proj` / `up_proj` / `down_proj` (PEFT-wrapped, so LoRA-A/B already baked in) and fuses **only** the activation via `forge.kernels.geglu`. This is intentional — there is no fused LoRA-MLP-GeGLU kernel yet, and writing one is out of scope for Day 2.
+    - GeGLU (`gelu_pytorch_tanh` / `gelu`, Gemma 2) → thin layered path: calls `module.gate_proj` / `up_proj` / `down_proj` (PEFT-wrapped, so LoRA-A/B already baked in) and fuses **only** the activation via `forge.kernels.geglu`. This is intentional, there is no fused LoRA-MLP-GeGLU kernel yet, and writing one is out of scope for Day 2.
     - Unrecognized activation → `raise ForgeSkipPatch(...)` so the patch loop falls through.
   - `make_lora_qkv_forward`: three additive Gemma 2 fixes (Qwen path unchanged):
     - Accepts both `past_key_value` (singular, older Qwen) and `past_key_values` (plural, Gemma 2). Uses whichever is non-None.
     - Reads `module.attn_logit_softcapping` (Gemma 2 specific) and forwards as `softcap=` to the attention interface when present.
     - Sliding-window detection was already Gemma-compatible because `getattr(module, "sliding_window", None)` is tried first; the Qwen-specific `config.use_sliding_window` + `max_window_layers` fallback only fires when that returns None.
 
-- `forge/forge/patching/gemma.py` — extended `GEMMA_MAPPING`:
-  - `Gemma2MLP`, `GemmaMLP` → `[("lora_mlp", {}), ("geglu", {"activation": "gelu"})]` (list — LoRA tried first, GeGLU fallback). The patch loop in `core.py` already supports list-of-specs and falls through on `ForgeSkipPatch`.
-  - `Gemma2Attention` → `("lora_qkv", {})` (single spec — no non-LoRA fused QKV baseline exists).
+- `forge/forge/patching/gemma.py`, extended `GEMMA_MAPPING`:
+  - `Gemma2MLP`, `GemmaMLP` → `[("lora_mlp", {}), ("geglu", {"activation": "gelu"})]` (list, LoRA tried first, GeGLU fallback). The patch loop in `core.py` already supports list-of-specs and falls through on `ForgeSkipPatch`.
+  - `Gemma2Attention` → `("lora_qkv", {})` (single spec, no non-LoRA fused QKV baseline exists).
 
-- `forge/tests/verify_patch_gemma.py` — one-line maintenance fix to `_print_patching_analysis` so it handles both tuple and list-of-tuples mapping values. **No test assertions changed.**
+- `forge/tests/verify_patch_gemma.py`, one-line maintenance fix to `_print_patching_analysis` so it handles both tuple and list-of-tuples mapping values. **No test assertions changed.**
 
 **New file:**
-- `forge/tests/verify_patch_lora_gemma.py` — 10-section integration test, **8/8 PASS**:
+- `forge/tests/verify_patch_lora_gemma.py`, 10-section integration test, **8/8 PASS**:
   - [1] PEFT availability  [2] Patching analysis  [3] Module census
-  - [4] Baseline forward  [5] Per-kernel bisection (lora_qkv / lora_mlp / both) — **forward bit-exact, max_diff = 0**
-  - [6] Backward gradient parity (q_proj + gate_proj LoRA-A/B) — note: PEFT inits `lora_B=0` so `dA` grads are trivially zero on BOTH sides; the test treats this as "trivial agree" rather than failing on cosine-of-zero
-  - [7] `ForgeSkipPatch` on `disable_adapter_layers()` — `patched_counts={}` as expected
+  - [4] Baseline forward  [5] Per-kernel bisection (lora_qkv / lora_mlp / both), **forward bit-exact, max_diff = 0**
+  - [6] Backward gradient parity (q_proj + gate_proj LoRA-A/B), note: PEFT inits `lora_B=0` so `dA` grads are trivially zero on BOTH sides; the test treats this as "trivial agree" rather than failing on cosine-of-zero
+  - [7] `ForgeSkipPatch` on `disable_adapter_layers()`, `patched_counts={}` as expected
   - [8] Bit-exact unpatch  [9] Negative tests (double-patch, unknown kernel)
-  - [10] Mini-convergence — 20 SGD steps, rel loss diff max = 6e-5, final = 9e-6
+  - [10] Mini-convergence, 20 SGD steps, rel loss diff max = 6e-5, final = 9e-6
 
 ### Repo state at handoff
 
@@ -72,7 +72,7 @@ git status (relevant):
   new:       forge/tests/test_lora_mlp.py
   new:       forge/tests/test_lora_convergence.py
   new:       forge/tests/verify_patch_lora_gemma.py
-  ?? context/forge_hackathon_site/  (HTML site — read-only reference)
+  ?? context/forge_hackathon_site/  (HTML site, read-only reference)
 ```
 
 **Nothing has been committed yet.** Don't `git commit` unless Xhitij asks.
@@ -83,15 +83,15 @@ git status (relevant):
 
 The single biggest unknown in the V1 plan, from `HACKATHON_SMOKE_TEST.md`:
 
-> Does our `torch.autograd.Function` pattern — specifically `ctx.save_for_backward(weight, ...)` — work correctly when FSDP2 has sharded the weight across GPUs?
+> Does our `torch.autograd.Function` pattern, specifically `ctx.save_for_backward(weight, ...)`, work correctly when FSDP2 has sharded the weight across GPUs?
 
 If yes → every kernel that follows the same pattern is FSDP2-compatible, and Phase 3 of the V1 plan is unblocked.
 
 If no → we need to redesign the pattern (likely: stop calling `save_for_backward` on weights; re-fetch from the module in backward so FSDP2's all-gather hook fires).
 
 For Gemma 2 + LoRA specifically, the pattern question splits into two parts:
-- **`LoRAQKVv4Function` / `lora_qkv_v3`** — does the v3/v4 backward survive when `W_q`, `W_k`, `W_v` are sharded params? These weights are *extracted at closure-build time* by `_lora_tensors()` and passed as raw tensors into the kernel. **This is the riskiest path.** If FSDP2 swaps the weight ref after `fully_shard()` is called (it usually does), the closure holds a stale pointer.
-- **GeGLU MLP path** — much safer. It calls `module.gate_proj(x)` as a submodule, so PyTorch + FSDP2 handle the weight all-gather. Only the activation goes through Triton, and the activation has no parameters.
+- **`LoRAQKVv4Function` / `lora_qkv_v3`**, does the v3/v4 backward survive when `W_q`, `W_k`, `W_v` are sharded params? These weights are *extracted at closure-build time* by `_lora_tensors()` and passed as raw tensors into the kernel. **This is the riskiest path.** If FSDP2 swaps the weight ref after `fully_shard()` is called (it usually does), the closure holds a stale pointer.
+- **GeGLU MLP path**, much safer. It calls `module.gate_proj(x)` as a submodule, so PyTorch + FSDP2 handle the weight all-gather. Only the activation goes through Triton, and the activation has no parameters.
 
 So we expect the GeGLU LoRA-MLP path to "just work" and the LoRA-QKV path to be the one that surfaces issues. If C2 or C3 fails, that's where to look first.
 
@@ -113,7 +113,7 @@ torchrun --version 2>&1 || python -c "import torch.distributed.run; print('torch
 **Hard requirements:**
 - `torch >= 2.4` (FSDP2 stable; `fully_shard` is the new API, NOT the old `FSDP` wrapper)
 - `device_count >= 2`
-- `peft >= 0.19` (the version Phase 2 was developed against — 0.19.1)
+- `peft >= 0.19` (the version Phase 2 was developed against, 0.19.1)
 - `transformers` with `Gemma2ForCausalLM` working (4.57+ is fine; Phase 2 used 4.57.6)
 - NCCL backend available (it is on any A100/H100 install)
 
@@ -167,11 +167,11 @@ The seed must match across ranks. **Seed BEFORE construction**, both `torch.manu
 
 ### 5.3 The two execution paths
 
-**Path A — single-GPU reference (rank 0 only, runs FIRST)**
+**Path A, single-GPU reference (rank 0 only, runs FIRST)**
 
 Rank 0:
 1. Build the PEFT-Gemma model on cuda:0.
-2. Save `state_dict()` to a shared file (use a tmpdir like `/tmp/forge_fsdp_init_{pid}.pt` — set `pid` from rank 0's PID and broadcast it).
+2. Save `state_dict()` to a shared file (use a tmpdir like `/tmp/forge_fsdp_init_{pid}.pt`, set `pid` from rank 0's PID and broadcast it).
 3. Run one forward + one greedy generate(max_new_tokens=24); save logits and generated token IDs.
 4. Run a 5-step Adam training loop on a fixed seeded batch; save the loss curve.
 5. Save reference grads after step 1 (LoRA-A and LoRA-B grads on `layers.0.self_attn.q_proj` and `layers.0.mlp.gate_proj`).
@@ -179,7 +179,7 @@ Rank 0:
 
 All other ranks: `dist.barrier()` until rank 0 signals done (a second barrier).
 
-**Path B — FSDP2 + forge.patch (all ranks)**
+**Path B, FSDP2 + forge.patch (all ranks)**
 
 After the barrier:
 1. Every rank builds an identical `peft_model`, then `load_state_dict()` from the file rank 0 saved.
@@ -196,9 +196,9 @@ After the barrier:
 |---|---|---|---|
 | **C1** | Doesn't crash | `torchrun` exits 0 | No NCCL errors, no hang, no CUDA OOM |
 | **C2** | Forward matches | inference logits FSDP2 vs single-GPU ref on rank 0 | `max_diff < 5e-2`, `cos > 0.999` (bf16 noise floor) |
-| **C3** | Gradients match | LoRA-A & LoRA-B grads (all-gathered) on rank 0 | `rel < 5e-2`, `cos > 0.9999`. For LoRA-A on a freshly-initialized model: `dA` is trivially zero (PEFT inits B=0), so the trivial-zero branch applies — both sides must agree on `||grad|| < 1e-6` |
+| **C3** | Gradients match | LoRA-A & LoRA-B grads (all-gathered) on rank 0 | `rel < 5e-2`, `cos > 0.9999`. For LoRA-A on a freshly-initialized model: `dA` is trivially zero (PEFT inits B=0), so the trivial-zero branch applies, both sides must agree on `||grad|| < 1e-6` |
 | **C4** | Memory is sharded | `cuda.max_memory_allocated()` per rank | Per-rank peak ≤ 60% of single-GPU peak. **Tiny model caveat:** with hidden=128 the absolute numbers are small; the *ratio* is what matters |
-| **C5** | Generation parity | greedy token IDs comparison | exact match for ≥ 22/24 tokens (allow ±2 token drift in case of bf16 tiebreak on logit argmax — exact match preferred) |
+| **C5** | Generation parity | greedy token IDs comparison | exact match for ≥ 22/24 tokens (allow ±2 token drift in case of bf16 tiebreak on logit argmax, exact match preferred) |
 | **C6** | Training converges with parity | 5-step loss curve | both runs converge; per-step `rel_diff < 2%`; final losses within `5%` |
 
 ### 5.5 Distributed primitives you'll need
@@ -217,7 +217,7 @@ device = f"cuda:{rank}"
 def all_gather_grad(param):
     """Return the full (unsharded) grad of an FSDP2-sharded param on rank 0; None elsewhere."""
     # In FSDP2, param.grad is a DTensor on the local shard. Use .full_tensor() to
-    # gather it. full_tensor() returns the full tensor on every rank — that's fine
+    # gather it. full_tensor() returns the full tensor on every rank, that's fine
     # for the comparison; rank 0 just does the assert.
     g = param.grad
     if hasattr(g, "full_tensor"):
@@ -252,7 +252,7 @@ for step in range(5):
     optimizer.step()
 ```
 
-FSDP2 handles the reduce-scatter on `.backward()` automatically. **Do NOT** call `model.no_sync()` between micro-batches — the goal is to test the full pipeline including grad-accum + reduce-scatter interaction.
+FSDP2 handles the reduce-scatter on `.backward()` automatically. **Do NOT** call `model.no_sync()` between micro-batches, the goal is to test the full pipeline including grad-accum + reduce-scatter interaction.
 
 ### 5.8 Adam configuration
 
@@ -274,33 +274,33 @@ Both runs use the same optimizer; same seed; identical micro-batches; the same l
 
 Read these BEFORE running. When something breaks, you'll save time recognizing the symptom.
 
-### Outcome B.1 — crash on `fully_shard()` itself
+### Outcome B.1, crash on `fully_shard()` itself
 **Likely cause:** `peft_model.base_model.model.model.layers[i]` doesn't have parameters in the expected place. PEFT inserts `Linear` wrappers (`peft.tuners.lora.layer.Linear`) around `q_proj`, etc.; FSDP2 should still find the underlying weights, but the wrapper layout can confuse `fully_shard`'s policy.
 **Fix:** wrap the `Gemma2DecoderLayer` (per-layer), not the whole model. The decoder layer contains the PEFT-wrapped projections as sub-submodules; FSDP2 walks down naturally.
 
-### Outcome B.2 — crash during forward
+### Outcome B.2, crash during forward
 **Likely cause:** `make_lora_qkv_forward` captures `W_q = module.q_proj.base_layer.weight` (or however `_lora_tensors` extracts it) at closure-build time. FSDP2 may have hooks that depend on going through `module.q_proj.forward()` to trigger the all-gather. Bypassing the submodule call with a raw tensor pointer breaks this.
-**Fix path:** in `forge/forge/patching/kernels/lora.py`, the LoRA-QKV factory needs to either (a) re-fetch `module.q_proj.base_layer.weight` inside the inner `forward()` closure (so the all-gather hook fires each forward), or (b) call `module.q_proj(x)` as a submodule and pull the LoRA-A/B contribution from `module.q_proj.lora_A["default"](x)` separately. **Option (b) is the cleanest** — mirrors what we already do in `make_lora_mlp_forward` for Gemma. The trade-off is losing the v4-fused projection (you get 3 independent matmuls instead of 1 packed one), but correctness > speed for the smoke test.
+**Fix path:** in `forge/forge/patching/kernels/lora.py`, the LoRA-QKV factory needs to either (a) re-fetch `module.q_proj.base_layer.weight` inside the inner `forward()` closure (so the all-gather hook fires each forward), or (b) call `module.q_proj(x)` as a submodule and pull the LoRA-A/B contribution from `module.q_proj.lora_A["default"](x)` separately. **Option (b) is the cleanest**, mirrors what we already do in `make_lora_mlp_forward` for Gemma. The trade-off is losing the v4-fused projection (you get 3 independent matmuls instead of 1 packed one), but correctness > speed for the smoke test.
 
-### Outcome C — forward output mismatches
+### Outcome C, forward output mismatches
 **Triage:**
 1. Print `W_q.shape` inside the factory's `forward` closure. If it's `[hidden/2, hidden]` instead of `[hidden, hidden]`, FSDP2 has sharded the param and we're seeing the local shard. That's the smoking gun for "save_for_backward broke."
 2. Try `mp_policy=None` to rule out precision casting.
 3. Check that `x` is identical on both ranks: `dist.all_reduce(x.float().sum())` should equal `world_size * single_x.sum()`.
 
-### Outcome D — gradients mismatch (forward OK)
+### Outcome D, gradients mismatch (forward OK)
 **Likely cause:** `LoRAQKVv4Function.backward` is reading `ctx.saved_tensors` and seeing a freed/dead reference because FSDP2 freed the all-gathered weight post-forward.
 **Fix:** route through PEFT submodules in the factory (Outcome B.2 fix path above). This sidesteps `save_for_backward` on FSDP-managed weights entirely.
 
-### Outcome E — correctness OK but memory not sharded
+### Outcome E, correctness OK but memory not sharded
 **Likely cause:** the closure pins the all-gathered weight as a closed-over Python reference.
-**Fix:** same as D — don't capture weights at closure-build time. Re-fetch each forward.
+**Fix:** same as D, don't capture weights at closure-build time. Re-fetch each forward.
 
-### Outcome F — flaky
+### Outcome F, flaky
 **First try:** add `torch.cuda.synchronize(); dist.barrier()` around the comparison. Triton kernels are async by default; FSDP2 collectives are async by default; the comparison may be racing against in-flight work.
 
 ### A LoRA-specific failure that's not in the H15 doc
-**`scaling` is captured by value, not by ref.** `_lora_tensors` returns `s_q = module.q_proj.scaling["default"]` — this is a Python float. That's fine, it doesn't go through FSDP2. But if the closure ever stored a *tensor* instead of a float, FSDP2 would not know how to handle it. Keep `scaling` as a Python scalar.
+**`scaling` is captured by value, not by ref.** `_lora_tensors` returns `s_q = module.q_proj.scaling["default"]`, this is a Python float. That's fine, it doesn't go through FSDP2. But if the closure ever stored a *tensor* instead of a float, FSDP2 would not know how to handle it. Keep `scaling` as a Python scalar.
 
 ---
 
@@ -320,7 +320,7 @@ def make_lora_qkv_forward(module, config):
     def forward(hidden_states, position_embeddings, attention_mask,
                 past_key_value=None, past_key_values=None,
                 cache_position=None, **kwargs):
-        # PEFT submodule call — FSDP2 sees this and all-gathers the weight.
+        # PEFT submodule call, FSDP2 sees this and all-gathers the weight.
         # The LoRA-A/B contribution is computed inside module.q_proj.forward().
         query_states = module.q_proj(hidden_states)
         key_states   = module.k_proj(hidden_states)
@@ -348,11 +348,11 @@ Following the H15 doc Section 8 template:
 > - `generation_token_match = ?/24`
 > - `training_loss_rel_diff_max = ?`
 >
-> **One sentence on the implication for V1:** e.g. "FSDP2 wrap survives the LoRA-fused autograd pattern on Gemma 2 with X tolerance; can proceed to Phase 3 multi-GPU benchmarks." or "QKV factory needs the submodule rewrite (Section 7) — pattern doesn't survive raw-tensor closures."
+> **One sentence on the implication for V1:** e.g. "FSDP2 wrap survives the LoRA-fused autograd pattern on Gemma 2 with X tolerance; can proceed to Phase 3 multi-GPU benchmarks." or "QKV factory needs the submodule rewrite (Section 7), pattern doesn't survive raw-tensor closures."
 
 ---
 
-## 9. Action plan — what to do when Xhitij says "go"
+## 9. Action plan, what to do when Xhitij says "go"
 
 1. **Verify environment (§4).** Paste the output. If anything's wrong, stop.
 2. **Run the existing Phase 1 + Phase 2 tests** to confirm the repo state on this machine matches what was tested on the 1-GPU box:
@@ -363,7 +363,7 @@ Following the H15 doc Section 8 template:
    python forge/tests/test_lora_convergence.py | tail -3 # expect 2/2 PASS
    python forge/tests/verify_patch_lora_gemma.py | tail -3 # expect 8/8 PASS
    ```
-   If any regresses, stop and report — the codebase on this box is not in sync.
+   If any regresses, stop and report, the codebase on this box is not in sync.
 3. **Write `forge/tests/verify_fsdp2_lora_gemma.py`** per the template in §10.
 4. **Smoke-run it single-rank** first: `torchrun --nproc-per-node=1 --standalone forge/tests/verify_fsdp2_lora_gemma.py`. FSDP2 supports world_size=1 (sharding is a no-op); this catches import / wiring bugs before you waste a real 2-GPU run.
 5. **Run for real:** `torchrun --nproc-per-node=2 --standalone forge/tests/verify_fsdp2_lora_gemma.py`.
@@ -548,7 +548,7 @@ def run_fsdp2(rank, world, device, dtype, init_path, ref_path):
         fully_shard(layer, mp_policy=mp_policy)
     fully_shard(_inner_model(peft_model), mp_policy=mp_policy)
 
-    # Apply forge.patch AFTER FSDP2 wrap — that's the order Phase 3 will use.
+    # Apply forge.patch AFTER FSDP2 wrap, that's the order Phase 3 will use.
     forge.patch(peft_model, kernels=["lora_qkv", "lora_mlp"])
     if rank == 0:
         print(f"[rank 0] patched_counts = {peft_model._forge_patched_counts}")
@@ -691,7 +691,7 @@ def main():
         print("\n=== FSDP2 run (all ranks) ===")
     results = run_fsdp2(rank, world, device, dtype, init_path, ref_path)
 
-    # C4 — gather per-rank peak mem
+    # C4, gather per-rank peak mem
     peak = torch.cuda.max_memory_allocated() / 1e9
     peaks = [None] * world
     dist.all_gather_object(peaks, peak)
@@ -703,11 +703,11 @@ def main():
                                                   # released memory; cuda.max_memory_allocated()
                                                   # is a high-water mark over the process lifetime.
                                                   # For a clean C4 we'd want a reset_peak_memory_stats()
-                                                  # between bake_reference and run_fsdp2 — see TODO below.
+                                                  # between bake_reference and run_fsdp2, see TODO below.
         max_peak = max(peaks)
         # C4 sanity: with hidden=128 the model is tiny, so absolute numbers aren't
         # informative. We're mostly checking the ratio. With world=2 and a tiny model,
-        # the overhead of NCCL buffers may dominate — print and let Xhitij judge.
+        # the overhead of NCCL buffers may dominate, print and let Xhitij judge.
         print(f"\n  C4 per-rank peaks (GB): {[f'{p:.3f}' for p in peaks]}")
         print(f"        max across ranks:    {max_peak:.3f} GB")
 
@@ -735,15 +735,15 @@ if __name__ == "__main__":
 
 ### Caveats baked into the template
 
-1. **The C4 peak-memory comparison is intentionally approximate.** `torch.cuda.max_memory_allocated()` is a process-lifetime high-water mark, and rank 0 also bakes the reference, so its peak is inflated by the single-GPU reference run. To get a clean C4, add `torch.cuda.reset_peak_memory_stats()` between `bake_reference()` and `run_fsdp2()` and re-measure. **Do this only if C4 is the deciding factor in the verdict** — on a tiny model the numbers are noisy anyway. For the real model story we'd want to run this at hidden=4096+ on a 80GB GPU.
+1. **The C4 peak-memory comparison is intentionally approximate.** `torch.cuda.max_memory_allocated()` is a process-lifetime high-water mark, and rank 0 also bakes the reference, so its peak is inflated by the single-GPU reference run. To get a clean C4, add `torch.cuda.reset_peak_memory_stats()` between `bake_reference()` and `run_fsdp2()` and re-measure. **Do this only if C4 is the deciding factor in the verdict**, on a tiny model the numbers are noisy anyway. For the real model story we'd want to run this at hidden=4096+ on a 80GB GPU.
 
 2. **`peft_model.generate` under FSDP2 may misbehave** with KV cache and sharded params. If C5 fails with a generation-specific crash (NCCL hang, CUDA illegal-memory in attention), drop the generate path and rely on raw forward-logits comparison only. Note the gap in the verdict.
 
-3. **The reference is generated by rank 0 with `forge.patch` NOT applied** — that's the right baseline (it's what HF + PEFT alone would do). Phase 2 already proved that `forge.patch(kernels=["lora_qkv","lora_mlp"])` matches PEFT-only forward bit-exact on single GPU, so a single-GPU `forge.patch` run isn't a separate ground truth — the PEFT-only reference IS the ground truth.
+3. **The reference is generated by rank 0 with `forge.patch` NOT applied**, that's the right baseline (it's what HF + PEFT alone would do). Phase 2 already proved that `forge.patch(kernels=["lora_qkv","lora_mlp"])` matches PEFT-only forward bit-exact on single GPU, so a single-GPU `forge.patch` run isn't a separate ground truth, the PEFT-only reference IS the ground truth.
 
 4. **The `forge.patch` call is AFTER `fully_shard`.** This is the right order because `fully_shard` mutates the module hierarchy; if you patched first, FSDP2 wouldn't see your patched forward in the wrapped module. Don't swap the order without testing both.
 
-5. **For load_state_dict on a freshly built peft_model on each rank:** PEFT's `get_peft_model` is deterministic given the same seed and config, so each rank's structure matches. `load_state_dict(rank0_dict)` then overwrites all weights to ensure exact agreement (defensive — the seed should make this redundant, but it's cheap insurance against any nondeterminism in PEFT's adapter init).
+5. **For load_state_dict on a freshly built peft_model on each rank:** PEFT's `get_peft_model` is deterministic given the same seed and config, so each rank's structure matches. `load_state_dict(rank0_dict)` then overwrites all weights to ensure exact agreement (defensive, the seed should make this redundant, but it's cheap insurance against any nondeterminism in PEFT's adapter init).
 
 ---
 
@@ -751,27 +751,27 @@ if __name__ == "__main__":
 
 (These all came up in Phases 1+2. Don't re-discover them.)
 
-### Footgun A — the experiments/reference namespace collision
+### Footgun A, the experiments/reference namespace collision
 
 The two kernel directories `kernels/lora_qkv/` and `kernels/lora_mlp/` both do `sys.path.insert(0, "../..")` at module-import time and expose top-level packages named `experiments` and `reference`. Whichever one loads first wins those names in `sys.modules`, and the other kernel's `from experiments.v5...` imports then resolve to the wrong directory.
 
 **Phase 1 workaround:** `test_lora_convergence.py` runs each kernel's loop in a subprocess. **This is also why Phase 1's `test_lora_qkv.py` and `test_lora_mlp.py` work standalone but break if you try to chain them.**
 
-**For Phase 3:** the FSDP2 test only imports the LoRA kernels through `forge.kernels.lora_*` (which uses `sys.path.insert(0, _POC_ROOT)` and then `from kernels.lora_qkv...`), so as long as you import `forge` ONCE at the top of the test file you should be fine. **Don't import directly from `experiments.vN.*`** — go through the `forge.kernels.*` shims.
+**For Phase 3:** the FSDP2 test only imports the LoRA kernels through `forge.kernels.lora_*` (which uses `sys.path.insert(0, _POC_ROOT)` and then `from kernels.lora_qkv...`), so as long as you import `forge` ONCE at the top of the test file you should be fine. **Don't import directly from `experiments.vN.*`**, go through the `forge.kernels.*` shims.
 
-### Footgun B — `_cos_sim` on zero vectors
+### Footgun B, `_cos_sim` on zero vectors
 
 If both sides have zero gradients (the trivial-zero case for `lora_A` at init), cosine similarity is undefined and Python returns NaN or 0. The Phase 2 test has a specific trivial-zero branch that says "both are zero, max_diff is also zero, so PASS." Copy this pattern into the FSDP2 test (already in the template, see `_evaluate`).
 
-### Footgun C — `verify_patch_gemma.py` has 2 stale pre-existing failures (NOT yours)
+### Footgun C, `verify_patch_gemma.py` has 2 stale pre-existing failures (NOT yours)
 
-The `vram` check fails because the test was written for a model bigger than the one it actually builds, and the `stub_kernel_raises` check fails because a refactor renamed `cross_entropy` to `fused_linear_ce`. Both predate Phase 1. **If you see these in passing, ignore them.** Don't be tricked into "fixing" them — Xhitij has flagged both as out-of-scope.
+The `vram` check fails because the test was written for a model bigger than the one it actually builds, and the `stub_kernel_raises` check fails because a refactor renamed `cross_entropy` to `fused_linear_ce`. Both predate Phase 1. **If you see these in passing, ignore them.** Don't be tricked into "fixing" them, Xhitij has flagged both as out-of-scope.
 
-### Footgun D — Gemma 2 alternates full / sliding-window attention by layer
+### Footgun D, Gemma 2 alternates full / sliding-window attention by layer
 
-`Gemma2Attention` sets `self.sliding_window` to either `None` or an int (typically 4096) depending on layer index. The LoRA factory already handles this — but if you're debugging a forward mismatch on a specific layer, check that the sliding window matches the reference. `module.sliding_window` is a per-instance attribute, NOT a config field.
+`Gemma2Attention` sets `self.sliding_window` to either `None` or an int (typically 4096) depending on layer index. The LoRA factory already handles this, but if you're debugging a forward mismatch on a specific layer, check that the sliding window matches the reference. `module.sliding_window` is a per-instance attribute, NOT a config field.
 
-### Footgun E — bf16 ground truth tolerances
+### Footgun E, bf16 ground truth tolerances
 
 Across all our tests so far, bf16 reduction-order noise lives at:
 - `max_diff(logits) ~ 5e-2` (worst case, large hidden)

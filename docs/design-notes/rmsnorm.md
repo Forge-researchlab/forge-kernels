@@ -9,7 +9,7 @@
 
 ## Scope
 
-This doc describes Forge RMSNorm **v1** — the placeholder baseline kept as
+This doc describes Forge RMSNorm **v1**, the placeholder baseline kept as
 the no-offset comparison point. v2/v3 supersede it for production use
 (Gemma support, fp64 gradcheck, autotune). It implements
 the Llama/Qwen-style operation:
@@ -63,10 +63,10 @@ design.
 This Forge version intentionally does not copy those full APIs yet. It gives the
 patching work a stable, minimal kernel surface for Qwen/Llama-style RMSNorm.
 
-## Known Boundaries (v1 placeholder — closed in v2/v3)
+## Known Boundaries (v1 placeholder, closed in v2/v3)
 
 - ~~No Gemma `weight + 1` offset mode yet.~~ → **Closed in v2** via `OFFSET: tl.constexpr`.
-- No no-affine mode yet. (Still deferred — not used by Qwen3 or Gemma.)
+- No no-affine mode yet. (Still deferred, not used by Qwen3 or Gemma.)
 - No distributed tensor support yet. (Still deferred for FSDP2.)
 - Hidden dimensions requiring a Triton block larger than `131072` are rejected.
 - ~~The current `dw` implementation materializes partial gradients and should be

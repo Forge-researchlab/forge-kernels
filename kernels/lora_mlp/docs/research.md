@@ -1,4 +1,4 @@
-# LoRA MLP Fused Kernel — Research Notes
+# LoRA MLP Fused Kernel, Research Notes
 
 ## Background
 
@@ -21,13 +21,13 @@ With LoRA on all three projections, this becomes 9 matmuls (3 base + 6 LoRA) plu
 
 1. **Memory**: LoRA intermediates `x @ A` (shape [B*S, r]) are small and fit in SRAM for typical ranks. Fusing avoids materializing them to HBM.
 2. **Kernel launch overhead**: 9 separate matmuls = 9 kernel launches. Fusing reduces to 1–3 launches.
-3. **Memory bandwidth**: the base matmul and LoRA addition read the same input `x` — fusing reuses it from registers/SRAM.
+3. **Memory bandwidth**: the base matmul and LoRA addition read the same input `x`, fusing reuses it from registers/SRAM.
 
 ## Primary Baseline: Unsloth
 
 Unsloth is the current state-of-the-art open-source LoRA MLP implementation. Our kernel targets improving upon it at the GPU kernel level.
 
-**Source**: https://github.com/unslothai/unsloth — code analysis in `docs/artifacts/unsloth/`
+**Source**: https://github.com/unslothai/unsloth, code analysis in `docs/artifacts/unsloth/`
 
 ### What Unsloth Does
 
@@ -66,9 +66,9 @@ matmul_lora() for down:
 |-----------|--------|
 | `X` read from HBM 4 times (gate W, gate A, up W, up A) | Bandwidth-bound on large sequences |
 | `e` and `g` (`[B*S, I]`) written to HBM, read back for SwiGLU | 2 round-trips of the largest intermediates |
-| `X @ A` intermediates (`[B*S, r]`) materialized to HBM | Unnecessary — they're tiny and fit in SRAM |
+| `X @ A` intermediates (`[B*S, r]`) materialized to HBM | Unnecessary, they're tiny and fit in SRAM |
 | 10 kernel launches | Launch overhead dominates at small batch/seq |
-| No matmul fusion — each cuBLAS call has its own tiling | Missed opportunity to share X tiles across ops |
+| No matmul fusion, each cuBLAS call has its own tiling | Missed opportunity to share X tiles across ops |
 
 ### What Unsloth Does Well (Keep)
 
@@ -80,7 +80,7 @@ matmul_lora() for down:
 ## Other Related Work
 
 ### Liger Kernel
-- Fuses **only** the SwiGLU activation (`SiLU(gate) * up`) via Triton — no LoRA handling
+- Fuses **only** the SwiGLU activation (`SiLU(gate) * up`) via Triton, no LoRA handling
 - Not a relevant baseline for LoRA fusion, but their activation kernel design is a reference
 - Code analysis: `docs/artifacts/liger_kernel/`
 
@@ -110,7 +110,7 @@ Ours:    1 Triton kernel per projection, X read once, X@A stays in registers/SRA
 **Kernel design** (output-stationary tiled matmul):
 1. Standard K-loop: accumulate `X_tile @ W_tile` in fp32 registers
 2. After the K-loop, compute the LoRA term for the same output tile:
-   - Load the full `A` column slice (only `r` columns — fits in registers for r ≤ 64)
+   - Load the full `A` column slice (only `r` columns, fits in registers for r ≤ 64)
    - Compute `X_tile @ A_slice` → shape `[BLOCK_M, r]` in registers
    - Load the `B` row slice for this output tile
    - Compute `(X_tile @ A_slice) @ B_slice` → shape `[BLOCK_M, BLOCK_N]`
@@ -119,7 +119,7 @@ Ours:    1 Triton kernel per projection, X read once, X@A stays in registers/SRA
 
 **Register budget**: for r=16 and BLOCK_M=128, the LoRA intermediate is 128×16 = 2048 fp32 values = 8 KB. Well within register/SRAM budget.
 
-**Benchmark target**: replace Unsloth's `matmul_lora()` — 1 launch vs 3, X read once vs twice.
+**Benchmark target**: replace Unsloth's `matmul_lora()`, 1 launch vs 3, X read once vs twice.
 
 ### Axis B: Fuse Gate + Up + SwiGLU → v2
 
@@ -183,24 +183,24 @@ Start with r ≤ 64 (covers the vast majority of practical LoRA configs).
 
 | Question | Answer |
 |----------|--------|
-| Does Unsloth fuse LoRA at the kernel level? | No — PyTorch autograd-level only. Matmuls are separate cuBLAS calls. |
-| Does Liger handle LoRA? | No — activation fusion only, no LoRA awareness. |
-| Can gate+up share input reads? | Yes — same input `X`, different weight matrices. Perfect for tile reuse. |
-| Is SwiGLU worth fusing into the matmul? | Yes — it's elementwise on the output tile, essentially free in registers. |
+| Does Unsloth fuse LoRA at the kernel level? | No, PyTorch autograd-level only. Matmuls are separate cuBLAS calls. |
+| Does Liger handle LoRA? | No, activation fusion only, no LoRA awareness. |
+| Can gate+up share input reads? | Yes, same input `X`, different weight matrices. Perfect for tile reuse. |
+| Is SwiGLU worth fusing into the matmul? | Yes, it's elementwise on the output tile, essentially free in registers. |
 
 ## Open Questions
 
 1. At what LoRA rank does Triton fusion stop beating separate cuBLAS calls? (needs benchmarking)
 2. How does the optimal tiling change across GPU architectures (A100 vs H100)?
-3. What's the best backward strategy — save `X@A` intermediates or recompute?
+3. What's the best backward strategy, save `X@A` intermediates or recompute?
 4. Can we handle non-power-of-2 LoRA ranks efficiently (e.g., r=24)?
 
 ## References
 
-- [LoRA: Low-Rank Adaptation of Large Language Models](https://arxiv.org/abs/2106.09685) — Hu et al., 2021
-- [LLaMA: Open and Efficient Foundation Language Models](https://arxiv.org/abs/2302.13971) — Touvron et al., 2023
-- [Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations](https://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf) — Tillet et al., 2019
-- [FlashAttention: Fast and Memory-Efficient Exact Attention](https://arxiv.org/abs/2205.14135) — Dao et al., 2022 (tiling strategy reference)
-- [Unsloth](https://github.com/unslothai/unsloth) — Daniel Han-Chen, 2023 (Apache-2.0)
-- [Liger Kernel](https://github.com/linkedin/Liger-Kernel) — LinkedIn, 2024 (BSD-2-Clause)
+- [LoRA: Low-Rank Adaptation of Large Language Models](https://arxiv.org/abs/2106.09685), Hu et al., 2021
+- [LLaMA: Open and Efficient Foundation Language Models](https://arxiv.org/abs/2302.13971), Touvron et al., 2023
+- [Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations](https://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf), Tillet et al., 2019
+- [FlashAttention: Fast and Memory-Efficient Exact Attention](https://arxiv.org/abs/2205.14135), Dao et al., 2022 (tiling strategy reference)
+- [Unsloth](https://github.com/unslothai/unsloth), Daniel Han-Chen, 2023 (Apache-2.0)
+- [Liger Kernel](https://github.com/linkedin/Liger-Kernel), LinkedIn, 2024 (BSD-2-Clause)
 - Detailed code analysis: `docs/artifacts/ANALYSIS.md`

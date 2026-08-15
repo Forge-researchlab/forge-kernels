@@ -1,4 +1,4 @@
-# Analysis: v2 Packed cuBLAS + Triton Epilogue — Beats Unsloth
+# Analysis: v2 Packed cuBLAS + Triton Epilogue, Beats Unsloth
 
 **Date**: 2026-05-24
 **Kernel version**: v2
@@ -7,7 +7,7 @@
 
 ## Summary
 
-v2 **beats Unsloth by 4-11%** on full QKV and **beats PyTorch by 16-23%**. The packed W+A approach (single cuBLAS call per projection that reads X once) combined with a Triton LoRA epilogue eliminates the redundant X read and the XA intermediate HBM round-trip. v2 is also **rank-independent** — performance barely changes from r=8 to r=64 (1.927ms → 1.924ms).
+v2 **beats Unsloth by 4-11%** on full QKV and **beats PyTorch by 16-23%**. The packed W+A approach (single cuBLAS call per projection that reads X once) combined with a Triton LoRA epilogue eliminates the redundant X read and the XA intermediate HBM round-trip. v2 is also **rank-independent**, performance barely changes from r=8 to r=64 (1.927ms → 1.924ms).
 
 ## Key Innovation
 
@@ -66,9 +66,9 @@ This halves the X HBM reads per projection (1x vs 2x) and replaces the addmm\_ w
 
 ### Why v2 Uses More Memory
 
-v2's packed matmul creates `[M, N+r]` output (e.g., `[8192, 4112]` = 64.5 MB for Q). The Triton epilogue then writes the final `[M, N]` output (64 MB). During the epilogue, BOTH tensors exist in GPU memory simultaneously — an extra ~32 MB total across all 3 projections.
+v2's packed matmul creates `[M, N+r]` output (e.g., `[8192, 4112]` = 64.5 MB for Q). The Triton epilogue then writes the final `[M, N]` output (64 MB). During the epilogue, BOTH tensors exist in GPU memory simultaneously, an extra ~32 MB total across all 3 projections.
 
-Unsloth's `addmm_` avoids this because it writes the LoRA result in-place into the base output — no extra allocation needed.
+Unsloth's `addmm_` avoids this because it writes the LoRA result in-place into the base output, no extra allocation needed.
 
 ### Tradeoff Assessment
 
@@ -77,13 +77,13 @@ Unsloth's `addmm_` avoids this because it writes the LoRA result in-place into t
 | Time | **1.09x faster** (9% gain) | Win |
 | Memory | **0.75x** (33% more) | Acceptable at LLaMA-8B scale |
 
-At 128 MB vs 96 MB, the memory increase is 32 MB — small relative to the total model memory (~5-16 GB for 7B-13B models). This is an acceptable tradeoff for 9% speed improvement.
+At 128 MB vs 96 MB, the memory increase is 32 MB, small relative to the total model memory (~5-16 GB for 7B-13B models). This is an acceptable tradeoff for 9% speed improvement.
 
 For memory-constrained scenarios, v2_2 could use an in-place epilogue (write directly into the packed output's first N columns, avoiding the extra allocation).
 
 ## Next Steps
 
-1. **v2_2**: In-place epilogue to eliminate the extra 32 MB allocation — match Unsloth's memory while keeping the speed gain
-2. **v2_3**: Fully-packed QKV (1 cuBLAS for all projections, X read once total) — could push to 1.15-1.20x Unsloth
+1. **v2_2**: In-place epilogue to eliminate the extra 32 MB allocation, match Unsloth's memory while keeping the speed gain
+2. **v2_3**: Fully-packed QKV (1 cuBLAS for all projections, X read once total), could push to 1.15-1.20x Unsloth
 3. **v3**: Wrap in `autograd.Function` with backward pass for training
-4. **v3 backward**: The backward has similar structure — packed W+A could help there too
+4. **v3 backward**: The backward has similar structure, packed W+A could help there too

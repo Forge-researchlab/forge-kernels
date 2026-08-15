@@ -1,4 +1,4 @@
-# LoRA QKV Fused Kernel — Research Notes
+# LoRA QKV Fused Kernel, Research Notes
 
 ## Background
 
@@ -42,7 +42,7 @@ In GQA (LLaMA-3), K and V have fewer heads:
 - K: [B*S, H_kv] (num_kv_heads × head_dim = 8 × 128 = 1024)
 - V: [B*S, H_kv] (same as K)
 
-This means W_k, W_v are [H_kv, H] — smaller than W_q.
+This means W_k, W_v are [H_kv, H], smaller than W_q.
 
 ### Why Fuse?
 
@@ -100,9 +100,9 @@ matmul_lora() for V:
 | Bottleneck | Impact |
 |-----------|--------|
 | `X` read from HBM 6 times (Q W, Q A, K W, K A, V W, V A) | Bandwidth-bound on large sequences |
-| `X @ A` intermediates ([B*S, r]) materialized to HBM 3 times | Unnecessary — they're tiny and fit in SRAM |
+| `X @ A` intermediates ([B*S, r]) materialized to HBM 3 times | Unnecessary, they're tiny and fit in SRAM |
 | 9 kernel launches | Launch overhead dominates at small batch/seq |
-| No cross-projection fusion — each cuBLAS call has its own tiling | Missed opportunity to share X tiles across Q/K/V |
+| No cross-projection fusion, each cuBLAS call has its own tiling | Missed opportunity to share X tiles across Q/K/V |
 | Each projection output written separately | 3 writes of [B*S, H] to HBM |
 
 ### What Unsloth Does Well (Keep)
@@ -130,7 +130,7 @@ Liger does **NOT** handle:
 
 ### Our Opportunity vs Liger
 
-Liger leaves the entire QKV+LoRA computation untouched. This is a greenfield opportunity — no existing Triton kernel to compare against for this specific operation.
+Liger leaves the entire QKV+LoRA computation untouched. This is a greenfield opportunity, no existing Triton kernel to compare against for this specific operation.
 
 ---
 
@@ -166,7 +166,7 @@ Ours:    1 Triton kernel per projection, X read once, X@A stays in registers/SRA
 **Kernel design** (output-stationary tiled matmul):
 1. Standard K-loop: accumulate `X_tile @ W_tile` in fp32 registers
 2. After K-loop, compute LoRA for the same output tile:
-   - Load full A column slice (only r columns — fits in registers for r ≤ 64)
+   - Load full A column slice (only r columns, fits in registers for r ≤ 64)
    - Compute `X_tile @ A_slice` → shape [BLOCK_M, r] in registers
    - Load B row slice for this output tile
    - Compute `(X_tile @ A_slice) @ B_slice` → shape [BLOCK_M, BLOCK_N]
@@ -175,7 +175,7 @@ Ours:    1 Triton kernel per projection, X read once, X@A stays in registers/SRA
 
 **Register budget**: for r=16, BLOCK_M=128: 128×16 = 2048 fp32 values = 8 KB.
 
-**Benchmark target**: replace Unsloth's `matmul_lora()` — 1 launch vs 3, X read once vs twice.
+**Benchmark target**: replace Unsloth's `matmul_lora()`, 1 launch vs 3, X read once vs twice.
 
 ### Axis B: Fuse Q+K+V Projections → v2
 
@@ -208,7 +208,7 @@ Unsloth: autograd.Function with 9 cuBLAS calls in forward
 Ours:    autograd.Function with 1-3 Triton kernel launches in forward
 ```
 
-This is the packaging step — combine the best kernel(s) from v1/v2 into a training-compatible wrapper with proper gradient computation.
+This is the packaging step, combine the best kernel(s) from v1/v2 into a training-compatible wrapper with proper gradient computation.
 
 ### Axis D: Fused Backward (stretch goal)
 
@@ -248,7 +248,7 @@ The QKV case differs from MLP in important ways:
 | Aspect | LoRA MLP | LoRA QKV |
 |--------|----------|----------|
 | Projections | 3 (gate, up, down) | 3 (Q, K, V) |
-| Non-linearity | SwiGLU between projections | None — projections are independent |
+| Non-linearity | SwiGLU between projections | None, projections are independent |
 | Output coupling | gate×up elementwise | Q, K, V are independent outputs |
 | GQA | N/A | K, V may have different dimensions |
 | Fusion opportunity | Can fuse activation with matmul | Can fuse all 3 matmuls (no activation barrier) |
@@ -259,7 +259,7 @@ The key insight: QKV projections are **completely independent** with **no non-li
 
 ## Open Questions
 
-1. Can we beat cuBLAS with Triton for these matmul shapes? (Lesson from lora_mlp: probably not — use cuBLAS + Triton epilogue instead)
+1. Can we beat cuBLAS with Triton for these matmul shapes? (Lesson from lora_mlp: probably not, use cuBLAS + Triton epilogue instead)
 2. For GQA, should K/V fusion be separate from Q? (different output dimensions)
 3. What's the optimal split: all-Triton vs cuBLAS+Triton-epilogue (like lora_mlp v3)?
 4. Is packed QKV (single [3H, H] weight) compatible with per-projection LoRA?
@@ -268,21 +268,21 @@ The key insight: QKV projections are **completely independent** with **no non-li
 
 ## Lessons from LoRA MLP (Apply Here)
 
-1. **Don't try to beat cuBLAS at matmul** — use cuBLAS for the base matmul, Triton for custom fusion only
-2. **Epilogue fusion wins** — cuBLAS for W matmul, then Triton kernel that reads base output + does LoRA + writes final result
-3. **Keep it rank-independent** — design so r=8 and r=64 run at similar speed
-4. **X reuse is the main win** — eliminating redundant HBM reads of the input tensor
+1. **Don't try to beat cuBLAS at matmul**, use cuBLAS for the base matmul, Triton for custom fusion only
+2. **Epilogue fusion wins**, cuBLAS for W matmul, then Triton kernel that reads base output + does LoRA + writes final result
+3. **Keep it rank-independent**, design so r=8 and r=64 run at similar speed
+4. **X reuse is the main win**, eliminating redundant HBM reads of the input tensor
 
 ---
 
 ## References
 
-- [LoRA: Low-Rank Adaptation of Large Language Models](https://arxiv.org/abs/2106.09685) — Hu et al., 2021
-- [LLaMA: Open and Efficient Foundation Language Models](https://arxiv.org/abs/2302.13971) — Touvron et al., 2023
-- [GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints](https://arxiv.org/abs/2305.13245) — Ainslie et al., 2023
-- [FlashAttention: Fast and Memory-Efficient Exact Attention](https://arxiv.org/abs/2205.14135) — Dao et al., 2022 (tiling strategy reference)
-- [Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations](https://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf) — Tillet et al., 2019
-- [Unsloth](https://github.com/unslothai/unsloth) — Daniel Han-Chen, 2023 (Apache-2.0)
-- [Liger Kernel](https://github.com/linkedin/Liger-Kernel) — LinkedIn, 2024 (BSD-2-Clause)
+- [LoRA: Low-Rank Adaptation of Large Language Models](https://arxiv.org/abs/2106.09685), Hu et al., 2021
+- [LLaMA: Open and Efficient Foundation Language Models](https://arxiv.org/abs/2302.13971), Touvron et al., 2023
+- [GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints](https://arxiv.org/abs/2305.13245), Ainslie et al., 2023
+- [FlashAttention: Fast and Memory-Efficient Exact Attention](https://arxiv.org/abs/2205.14135), Dao et al., 2022 (tiling strategy reference)
+- [Triton: An Intermediate Language and Compiler for Tiled Neural Network Computations](https://www.eecs.harvard.edu/~htk/publication/2019-mapl-tillet-kung-cox.pdf), Tillet et al., 2019
+- [Unsloth](https://github.com/unslothai/unsloth), Daniel Han-Chen, 2023 (Apache-2.0)
+- [Liger Kernel](https://github.com/linkedin/Liger-Kernel), LinkedIn, 2024 (BSD-2-Clause)
 - Detailed code analysis: `docs/artifacts/ANALYSIS.md`
 - LoRA MLP sister project: `../lora_mlp/` (lessons learned apply)

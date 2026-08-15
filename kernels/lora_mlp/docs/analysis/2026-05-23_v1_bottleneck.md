@@ -1,4 +1,4 @@
-# Performance Analysis — 2026-05-23 (Updated)
+# Performance Analysis, 2026-05-23 (Updated)
 
 ## Bottleneck: 64% from base Triton matmul being 0.73x cuBLAS, 36% from LoRA K-loop overhead
 
@@ -15,7 +15,7 @@
 | **v1** fused LoRA | 6.763 | 0.63x | 0.64x | 1 |
 | **v1** base only (no LoRA) | 5.779 | 0.73x | — | 1 |
 
-### Per-projection — down (M=8192, N=4096, K=14336, r=16, bf16)
+### Per-projection, down (M=8192, N=4096, K=14336, r=16, bf16)
 
 | Kernel | Time (ms) | vs cuBLAS | vs Unsloth | LoRA OH |
 |--------|-----------|-----------|------------|---------|

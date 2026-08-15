@@ -1,4 +1,4 @@
-# LoRA QKV Kernel — Benchmark Log
+# LoRA QKV Kernel, Benchmark Log
 
 ## Methodology
 
@@ -10,7 +10,7 @@ Three baselines, from simplest to most optimized:
 |----------|-------------|----------------------|
 | **PyTorch naive** | Separate `nn.Linear` calls + manual LoRA `addmm_` for Q, K, V | 9+ |
 | **Unsloth `matmul_lora` × 3** | Per-projection: `X@W + s*(X@A)@B` via 3 cuBLAS calls each | 9 (3 per projection × 3 projections) |
-| **Packed QKV (no LoRA)** | Single `X @ W_qkv^T` then split — represents cuBLAS lower bound | 1 |
+| **Packed QKV (no LoRA)** | Single `X @ W_qkv^T` then split, represents cuBLAS lower bound | 1 |
 
 The primary comparison target is **Unsloth `matmul_lora` × 3** since it represents the best available open-source LoRA QKV approach.
 
@@ -74,7 +74,7 @@ rank=16, seq=2048, batch=4, dtype=bf16
 <!-- Results will be added as kernel versions are developed -->
 
 <!--
-### v1 — Per-Projection Fused LoRA — YYYY-MM-DD
+### v1, Per-Projection Fused LoRA, YYYY-MM-DD
 
 **QKV forward** (batch=4, seq=2048, hidden=4096, rank=16, dtype=bf16):
 
@@ -89,7 +89,7 @@ CSV: `benchmarks/results/v1_YYYYMMDD_*.csv`
 -->
 
 <!--
-### v2 — Q+K+V Projection Fusion — YYYY-MM-DD
+### v2, Q+K+V Projection Fusion, YYYY-MM-DD
 
 (TBD)
 -->

@@ -1,4 +1,4 @@
-# LoRA MLP Kernel — Benchmark Log
+# LoRA MLP Kernel, Benchmark Log
 
 ## Methodology
 
@@ -69,7 +69,7 @@ hidden=4096, intermediate=14336, rank=16, seq=2048, batch=4, dtype=bf16
 
 ## Results
 
-### v1 — Fused LoRA Matmul — 2026-05-23
+### v1, Fused LoRA Matmul, 2026-05-23
 
 **Per-projection: gate/up** (M=8192, N=14336, K=4096, dtype=bf16):
 
@@ -98,14 +98,14 @@ hidden=4096, intermediate=14336, rank=16, seq=2048, batch=4, dtype=bf16
 | 32 | 14.19 | 22.85 | 0.62x |
 | 64 | 14.30 | 28.17 | 0.51x |
 
-**Analysis**: v1 is slower than cuBLAS for the base matmul. The Triton tiled matmul achieves ~70% of cuBLAS throughput. LoRA overhead grows linearly with rank (extra A dot in the fused K-loop). The architecture is correct — X is read once from HBM (vs twice in Unsloth) — but cuBLAS's highly optimized memory access patterns dominate.
+**Analysis**: v1 is slower than cuBLAS for the base matmul. The Triton tiled matmul achieves ~70% of cuBLAS throughput. LoRA overhead grows linearly with rank (extra A dot in the fused K-loop). The architecture is correct, X is read once from HBM (vs twice in Unsloth), but cuBLAS's highly optimized memory access patterns dominate.
 
 **Implication for v2**: the per-projection speedup target is hard to hit with Triton vs cuBLAS. The real win comes from gate+up fusion (eliminate 2 full X reads + 2 large intermediate writes) which is structurally impossible with separate cuBLAS calls.
 
 CSV: `benchmarks/results/v1_20260523_*.csv`
 
 <!--
-### v2 — Gate+Up+SwiGLU Fusion — YYYY-MM-DD
+### v2, Gate+Up+SwiGLU Fusion, YYYY-MM-DD
 
 (TBD)
 -->

@@ -14,10 +14,10 @@ By contributing you agree that your work is licensed under
 This repository exists to measure kernels, and it has already been burned by the
 alternative. Two kernels sat in `main` for months with harnesses that had never
 been executed. When they were finally run, the fused linear cross-entropy kernel
-turned out to be 5× *slower* than PyTorch eager while using *more* memory — the
-exact opposite of the kernel's purpose — because of a per-chunk temporary that no
+turned out to be 5× *slower* than PyTorch eager while using *more* memory, the
+exact opposite of the kernel's purpose, because of a per-chunk temporary that no
 one had measured. See the [fused linear cross-entropy
-section](docs/benchmarks.md#fused-linear-cross-entropy-what-the-first-measurement-found)
+section](docs/benchmarks/benchmarks.md#fused-linear-cross-entropy-the-first-measurement-and-the-fix)
 in the benchmarks doc.
 
 So if your change touches performance:
@@ -28,8 +28,8 @@ So if your change touches performance:
    nothing without them; the same kernel here ranges from 0.31× to 1.49×
    depending only on shape.
 3. Report the regressions too. The benchmarks doc has a
-   [Where these kernels lose](docs/benchmarks.md#where-these-kernels-lose) section
-   and it is load-bearing — reviewers trust the wins because the losses are listed.
+   [Where these kernels lose](docs/benchmarks/benchmarks.md#where-these-kernels-lose) section
+   and it is load-bearing: reviewers trust the wins because the losses are listed.
 
 ## Branches and how work lands
 
@@ -74,7 +74,7 @@ uv run pytest kernels/rope/tests/           # 4
 **Run each kernel suite as its own process.** Every kernel puts its own
 `experiments/` package on `sys.path` under the same top-level name, so whichever
 gets imported first wins and the rest resolve to the wrong kernel. Combining
-them produces errors that look like missing code but are not — for example
+them produces errors that look like missing code but are not, for example
 `No module named 'experiments.v4.lora_qkv_kernel_v4'`. Separately, all 660 tests
 pass.
 
@@ -88,7 +88,7 @@ uv run python benchmarks/bench_all.py --only <name>
 ## Benchmarking on a shared machine
 
 Check `nvidia-smi` first and confirm the GPU is idle. A pass taken while another
-process held the GPU reported every provider — including the PyTorch baseline —
+process held the GPU reported every provider, including the PyTorch baseline,
 at roughly half speed, which silently invalidates every ratio in the file. Peak
 memory figures are not affected by contention.
 
@@ -115,6 +115,6 @@ so it runs with everything else, and re-export the kernel through
 
 Use the templates: **bug** for something that is broken, **enhancement** for
 improving something that already works, **feature** for something new. Please
-include your GPU, torch version, and Triton version — several problems here were
+include your GPU, torch version, and Triton version. Several problems here were
 version-specific, such as `tl.atomic_add` rejecting bf16 on Triton 3.0 and
 `fully_shard` not being public before torch 2.6.

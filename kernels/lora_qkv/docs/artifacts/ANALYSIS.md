@@ -123,7 +123,7 @@ With perfect fusion (X read once): ~113 MB saved, a **26% reduction** in HBM tra
 
 ### Key Design Decisions
 
-1. **No kernel-level fusion**: matmuls are separate cuBLAS calls — optimized for the common case where cuBLAS is fastest
+1. **No kernel-level fusion**: matmuls are separate cuBLAS calls, optimized for the common case where cuBLAS is fastest
 2. **Per-projection independence**: Q, K, V handled identically via the same `matmul_lora()` function
 3. **No cross-projection sharing**: each projection reads X independently from HBM
 
@@ -152,7 +152,7 @@ Liger Kernel does **NOT** provide fused QKV projections or LoRA handling. Their 
 
 ### Relevance to Our Project
 
-Liger is **not a baseline** for this project. The QKV + LoRA fusion is a greenfield opportunity — no existing Triton kernel implements it. Liger's Triton kernel design patterns (row-parallel grid, fp32 accumulation, in-place backward) are useful as reference for code structure only.
+Liger is **not a baseline** for this project. The QKV + LoRA fusion is a greenfield opportunity, no existing Triton kernel implements it. Liger's Triton kernel design patterns (row-parallel grid, fp32 accumulation, in-place backward) are useful as reference for code structure only.
 
 ---
 
@@ -216,7 +216,7 @@ All three projections read the same input `X`. A fused kernel could:
 - Add LoRA terms to each
 - Write Q, K, V tiles to HBM
 
-This reduces X reads from 6× to 1×. Unlike the MLP case, there is **no activation barrier** between Q, K, V — they are completely independent, making full fusion possible.
+This reduces X reads from 6× to 1×. Unlike the MLP case, there is **no activation barrier** between Q, K, V, they are completely independent, making full fusion possible.
 
 ### 5.3 GQA-Aware Tiling
 
@@ -236,10 +236,10 @@ For `r ≤ 16`, the LoRA intermediate `X_tile @ A` (shape `[BLOCK_M, r]`) fits i
 
 From the sister project `../lora_mlp/`:
 
-1. **Don't try to beat cuBLAS at matmul** — Triton matmul achieved only ~0.73× of cuBLAS throughput
-2. **Epilogue fusion wins** — cuBLAS for W matmul, then Triton for the LoRA epilogue
-3. **Keep it rank-independent** — design so r=8 and r=64 run at similar speed
-4. **X reuse is the main win** — eliminating redundant HBM reads of the input tensor
+1. **Don't try to beat cuBLAS at matmul**, Triton matmul achieved only ~0.73× of cuBLAS throughput
+2. **Epilogue fusion wins**, cuBLAS for W matmul, then Triton for the LoRA epilogue
+3. **Keep it rank-independent**, design so r=8 and r=64 run at similar speed
+4. **X reuse is the main win**, eliminating redundant HBM reads of the input tensor
 
 The QKV case is **more favorable** than MLP because:
 - No activation function barrier (can fuse all 3 projections freely)
@@ -281,7 +281,7 @@ Level 3: Our v2 (fused QKV)  → 1 launch, X read 1x, all LoRA in registers
 | `reference/unsloth_baseline.py` | Unsloth-style baseline with addmm_ (primary perf target) |
 | `docs/research.md` | Research notes, improvement axes, GQA analysis |
 | `docs/benchmarks.md` | Benchmark methodology and results |
-| `../lora_mlp/` | Sister project — lessons learned apply here |
+| `../lora_mlp/` | Sister project, lessons learned apply here |
 
 ---
 
