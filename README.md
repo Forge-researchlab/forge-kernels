@@ -172,6 +172,9 @@ every number here comes from one card. Licensed under [Apache-2.0](LICENSE).
 - **Sasank Tumpati**: fused linear cross-entropy, Qwen patch adapters
 - **Shaurya Madukuri**: Embedding, Cross-Entropy, Qwen2.5-0.5B LoRA demo, FSDP2 analysis artifacts
 - **Xhitij C**: LoRA QKV, GeGLU
+- **Gautam**
+- **Srinivasan**
+- **Jithamanyu**: benchmark harness
 
 Some commits were authored from a shared GPU box, so `git log` does not reflect
 ownership. The list above is authoritative.
