@@ -8,6 +8,8 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from kernels.geglu import ForgeGEGLUFunction
+from kernels.geglu import ForgePackedGEGLUFunction
 from kernels.geglu import geglu
 from kernels.geglu import geglu_mlp
 from kernels.geglu import geglu_packed
@@ -268,6 +270,51 @@ def test_geglu_mlp_packed_matches_separate_and_reference(use_bias, approximate, 
         torch.testing.assert_close(packed_bias.grad[:intermediate], gate_bias_ref.grad, atol=atol, rtol=rtol)
         torch.testing.assert_close(packed_bias.grad[intermediate:], up_bias_ref.grad, atol=atol, rtol=rtol)
         torch.testing.assert_close(down_bias_packed.grad, down_bias_ref.grad, atol=atol, rtol=rtol)
+
+
+@pytest.mark.parametrize("approximate", ["tanh", "none"])
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="Triton GEGLU path requires CUDA")
+def test_geglu_gradcheck_fp64(approximate):
+    torch.manual_seed(0)
+    shape = (2, 3, 8)
+    gate = torch.randn(*shape, device=DEVICE, dtype=torch.float64, requires_grad=True)
+    up = torch.randn(*shape, device=DEVICE, dtype=torch.float64, requires_grad=True)
+
+    def func(gate, up):
+        return ForgeGEGLUFunction.apply(gate, up, approximate, True)
+
+    assert torch.autograd.gradcheck(
+        func,
+        (gate, up),
+        eps=1e-3,
+        atol=1e-2,
+        rtol=1e-2,
+        nondet_tol=1e-3,
+        check_undefined_grad=False,
+        check_batched_grad=False,
+    )
+
+
+@pytest.mark.parametrize("approximate", ["tanh", "none"])
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="Triton GEGLU path requires CUDA")
+def test_geglu_packed_gradcheck_fp64(approximate):
+    torch.manual_seed(1)
+    shape = (2, 3, 8)
+    gate_up = torch.randn(*shape, device=DEVICE, dtype=torch.float64, requires_grad=True)
+
+    def func(gate_up):
+        return ForgePackedGEGLUFunction.apply(gate_up, approximate, True)
+
+    assert torch.autograd.gradcheck(
+        func,
+        (gate_up,),
+        eps=1e-3,
+        atol=1e-2,
+        rtol=1e-2,
+        nondet_tol=1e-3,
+        check_undefined_grad=False,
+        check_batched_grad=False,
+    )
 
 
 def test_geglu_rejects_invalid_inputs():

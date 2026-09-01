@@ -29,9 +29,9 @@ def _check_same_shape_inputs(gate: torch.Tensor, up: torch.Tensor) -> None:
 
 
 def _check_cuda_dtype(x: torch.Tensor) -> None:
-    """Inputs: a tensor. Outputs: none (raises on unsupported dtype). Logic: the CUDA kernels only handle fp16/bf16/fp32."""
-    if x.dtype not in (torch.float16, torch.bfloat16, torch.float32):
-        raise TypeError(f"CUDA GEGLU supports fp16, bf16, and fp32, got {x.dtype}")
+    """Inputs: a tensor. Outputs: none (raises on unsupported dtype). Logic: the CUDA kernels handle fp16/bf16/fp32 for training/inference, plus fp64 so gradcheck can run the real kernel."""
+    if x.dtype not in (torch.float16, torch.bfloat16, torch.float32, torch.float64):
+        raise TypeError(f"CUDA GEGLU supports fp16, bf16, fp32, and fp64, got {x.dtype}")
 
 
 def _check_packed_input(gate_up: torch.Tensor) -> None:

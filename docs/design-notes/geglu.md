@@ -407,7 +407,7 @@ Implementation notes:
 Correctness plan:
 
 - Top-level tests cover separate and packed APIs, forward/backward parity, `approximate="tanh"` and `"none"`, fp32/fp16/bf16, odd hidden sizes, preserve-input mode, CPU fallback, invalid inputs, special forward values, and a `hidden=65537` flat-path case.
-- Gradcheck is deferred because the Triton CUDA path targets fp32/fp16/bf16, while PyTorch gradcheck expects double precision. Backward parity against PyTorch autograd is the hard gate for the POC.
+- `test_geglu_gradcheck_fp64` and `test_geglu_packed_gradcheck_fp64` now run `torch.autograd.gradcheck` through `ForgeGEGLUFunction`/`ForgePackedGEGLUFunction` on small fp64 inputs, the same way RoPE's gradcheck does. `_check_cuda_dtype` allows fp64 for this; fp32/fp16/bf16 remain the intended training/inference dtypes.
 
 Benchmark plan:
 
